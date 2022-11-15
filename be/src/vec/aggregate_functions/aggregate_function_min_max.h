@@ -23,8 +23,10 @@
 #include "common/logging.h"
 #include "vec/aggregate_functions/aggregate_function.h"
 #include "vec/columns/column_decimal.h"
+#include "vec/columns/column_fixed_length_object.h"
 #include "vec/columns/column_vector.h"
 #include "vec/common/assert_cast.h"
+#include "vec/data_types/data_type_fixed_length_object.h"
 #include "vec/io/io_helper.h"
 
 namespace doris::vectorized {
@@ -40,7 +42,11 @@ private:
     T value;
 
 public:
+    SingleValueDataFixed() = default;
+    SingleValueDataFixed(bool has_value_, T value_) : has_value(has_value_), value(value_) {}
     bool has() const { return has_value; }
+
+    constexpr static bool IsFixedLength = true;
 
     void insert_result_into(IColumn& to) const {
         if (has()) {
@@ -117,6 +123,24 @@ public:
         }
     }
 
+    bool change_first_time(const IColumn& column, size_t row_num, Arena* arena) {
+        if (!has()) {
+            change(column, row_num, arena);
+            return true;
+        } else {
+            return false;
+        }
+    }
+
+    bool change_first_time(const Self& to, Arena* arena) {
+        if (!has() && to.has()) {
+            change(to, arena);
+            return true;
+        } else {
+            return false;
+        }
+    }
+
     bool is_equal_to(const Self& to) const { return has() && to.value == value; }
 
     bool is_equal_to(const IColumn& column, size_t row_num) const {
@@ -136,7 +160,11 @@ private:
     Type value;
 
 public:
+    SingleValueDataDecimal() = default;
+    SingleValueDataDecimal(bool has_value_, T value_) : has_value(has_value_), value(value_) {}
     bool has() const { return has_value; }
+
+    constexpr static bool IsFixedLength = true;
 
     void insert_result_into(IColumn& to) const {
         if (has()) {
@@ -213,6 +241,24 @@ public:
         }
     }
 
+    bool change_first_time(const IColumn& column, size_t row_num, Arena* arena) {
+        if (!has()) {
+            change(column, row_num, arena);
+            return true;
+        } else {
+            return false;
+        }
+    }
+
+    bool change_first_time(const Self& to, Arena* arena) {
+        if (!has() && to.has()) {
+            change(to, arena);
+            return true;
+        } else {
+            return false;
+        }
+    }
+
     bool is_equal_to(const Self& to) const { return has() && to.value == value; }
 
     bool is_equal_to(const IColumn& column, size_t row_num) const {
@@ -241,6 +287,8 @@ private:
 
 public:
     ~SingleValueDataString() { delete[] large_data; }
+
+    constexpr static bool IsFixedLength = false;
 
     bool has() const { return size >= 0; }
 
@@ -369,6 +417,24 @@ public:
         }
     }
 
+    bool change_first_time(const IColumn& column, size_t row_num, Arena* arena) {
+        if (!has()) {
+            change(column, row_num, arena);
+            return true;
+        } else {
+            return false;
+        }
+    }
+
+    bool change_first_time(const Self& to, Arena* arena) {
+        if (!has() && to.has()) {
+            change(to, arena);
+            return true;
+        } else {
+            return false;
+        }
+    }
+
     bool is_equal_to(const Self& to) const {
         return has() && to.get_string_ref() == get_string_ref();
     }
@@ -377,8 +443,9 @@ public:
 };
 
 template <typename Data>
-struct AggregateFunctionMaxData : Data {
+struct AggregateFunctionMaxData : public Data {
     using Self = AggregateFunctionMaxData;
+    using Data::IsFixedLength;
 
     bool change_if_better(const IColumn& column, size_t row_num, Arena* arena) {
         return this->change_if_greater(column, row_num, arena);
@@ -393,6 +460,7 @@ struct AggregateFunctionMaxData : Data {
 template <typename Data>
 struct AggregateFunctionMinData : Data {
     using Self = AggregateFunctionMinData;
+    using Data::IsFixedLength;
 
     bool change_if_better(const IColumn& column, size_t row_num, Arena* arena) {
         return this->change_if_less(column, row_num, arena);
@@ -402,12 +470,29 @@ struct AggregateFunctionMinData : Data {
     static const char* name() { return "min"; }
 };
 
+template <typename Data>
+struct AggregateFunctionAnyData : Data {
+    using Self = AggregateFunctionAnyData;
+    using Data::IsFixedLength;
+
+    bool change_if_better(const IColumn& column, size_t row_num, Arena* arena) {
+        return this->change_first_time(column, row_num, arena);
+    }
+    bool change_if_better(const Self& to, Arena* arena) {
+        return this->change_first_time(to, arena);
+    }
+
+    static const char* name() { return "any"; }
+};
+
 template <typename Data, bool AllocatesMemoryInArena>
 class AggregateFunctionsSingleValue final
         : public IAggregateFunctionDataHelper<
                   Data, AggregateFunctionsSingleValue<Data, AllocatesMemoryInArena>> {
 private:
     DataTypePtr& type;
+    using Base = IAggregateFunctionDataHelper<
+            Data, AggregateFunctionsSingleValue<Data, AllocatesMemoryInArena>>;
 
 public:
     AggregateFunctionsSingleValue(const DataTypePtr& type_)
@@ -456,6 +541,89 @@ public:
     void insert_result_into(ConstAggregateDataPtr __restrict place, IColumn& to) const override {
         this->data(place).insert_result_into(to);
     }
+
+    void deserialize_from_column(AggregateDataPtr places, const IColumn& column, Arena* arena,
+                                 size_t num_rows) const override {
+        if constexpr (Data::IsFixedLength) {
+            const auto& col = static_cast<const ColumnFixedLengthObject&>(column);
+            auto* column_data = reinterpret_cast<const Data*>(col.get_data().data());
+            Data* data = reinterpret_cast<Data*>(places);
+            for (size_t i = 0; i != num_rows; ++i) {
+                data[i] = column_data[i];
+            }
+        } else {
+            Base::deserialize_from_column(places, column, arena, num_rows);
+        }
+    }
+
+    void serialize_to_column(const std::vector<AggregateDataPtr>& places, size_t offset,
+                             MutableColumnPtr& dst, const size_t num_rows) const override {
+        if constexpr (Data::IsFixedLength) {
+            auto& dst_column = static_cast<ColumnFixedLengthObject&>(*dst);
+            dst_column.resize(num_rows);
+            auto* dst_data = reinterpret_cast<Data*>(dst_column.get_data().data());
+            for (size_t i = 0; i != num_rows; ++i) {
+                dst_data[i] = this->data(places[i] + offset);
+            }
+        } else {
+            Base::serialize_to_column(places, offset, dst, num_rows);
+        }
+    }
+
+    void streaming_agg_serialize_to_column(const IColumn** columns, MutableColumnPtr& dst,
+                                           const size_t num_rows, Arena* arena) const override {
+        if constexpr (Data::IsFixedLength) {
+            auto& dst_column = static_cast<ColumnFixedLengthObject&>(*dst);
+            dst_column.resize(num_rows);
+            auto* dst_data = reinterpret_cast<Data*>(dst_column.get_data().data());
+            for (size_t i = 0; i != num_rows; ++i) {
+                dst_data[i].change(*columns[0], i, arena);
+            }
+        } else {
+            Base::streaming_agg_serialize_to_column(columns, dst, num_rows, arena);
+        }
+    }
+
+    void deserialize_and_merge_from_column(AggregateDataPtr __restrict place, const IColumn& column,
+                                           Arena* arena) const override {
+        if constexpr (Data::IsFixedLength) {
+            const auto& col = static_cast<const ColumnFixedLengthObject&>(column);
+            auto* column_data = reinterpret_cast<const Data*>(col.get_data().data());
+            const size_t num_rows = column.size();
+            for (size_t i = 0; i != num_rows; ++i) {
+                this->data(place).change_if_better(column_data[i], arena);
+            }
+        } else {
+            Base::deserialize_and_merge_from_column(place, column, arena);
+        }
+    }
+
+    void serialize_without_key_to_column(ConstAggregateDataPtr __restrict place,
+                                         MutableColumnPtr& dst) const override {
+        if constexpr (Data::IsFixedLength) {
+            auto& col = assert_cast<ColumnFixedLengthObject&>(*dst);
+            col.resize(1);
+            *reinterpret_cast<Data*>(col.get_data().data()) = this->data(place);
+        } else {
+            Base::serialize_without_key_to_column(place, dst);
+        }
+    }
+
+    MutableColumnPtr create_serialize_column() const override {
+        if constexpr (Data::IsFixedLength) {
+            return ColumnFixedLengthObject::create(sizeof(Data));
+        } else {
+            return ColumnString::create();
+        }
+    }
+
+    DataTypePtr get_serialized_type() const override {
+        if constexpr (Data::IsFixedLength) {
+            return std::make_shared<DataTypeFixedLengthObject>();
+        } else {
+            return std::make_shared<DataTypeString>();
+        }
+    }
 };
 
 AggregateFunctionPtr create_aggregate_function_max(const std::string& name,
@@ -464,6 +632,11 @@ AggregateFunctionPtr create_aggregate_function_max(const std::string& name,
                                                    const bool result_is_nullable);
 
 AggregateFunctionPtr create_aggregate_function_min(const std::string& name,
+                                                   const DataTypes& argument_types,
+                                                   const Array& parameters,
+                                                   const bool result_is_nullable);
+
+AggregateFunctionPtr create_aggregate_function_any(const std::string& name,
                                                    const DataTypes& argument_types,
                                                    const Array& parameters,
                                                    const bool result_is_nullable);

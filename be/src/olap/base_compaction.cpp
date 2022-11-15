@@ -49,9 +49,11 @@ Status BaseCompaction::prepare_compact() {
 }
 
 Status BaseCompaction::execute_compact_impl() {
+#ifndef __APPLE__
     if (config::enable_base_compaction_idle_sched) {
         Thread::set_idle_sched();
     }
+#endif
     std::unique_lock<std::mutex> lock(_tablet->get_base_compaction_lock(), std::try_to_lock);
     if (!lock.owns_lock()) {
         LOG(WARNING) << "another base compaction is running. tablet=" << _tablet->full_name();
@@ -66,7 +68,7 @@ Status BaseCompaction::execute_compact_impl() {
         return Status::OLAPInternalError(OLAP_ERR_BE_CLONE_OCCURRED);
     }
 
-    SCOPED_ATTACH_TASK(_mem_tracker, ThreadContext::TaskType::COMPACTION);
+    SCOPED_ATTACH_TASK(_mem_tracker);
 
     // 2. do base compaction, merge rowsets
     int64_t permits = get_compaction_permits();
@@ -105,7 +107,8 @@ void BaseCompaction::_filter_input_rowset() {
 
 Status BaseCompaction::pick_rowsets_to_compact() {
     _input_rowsets.clear();
-    _tablet->pick_candidate_rowsets_to_base_compaction(&_input_rowsets);
+    std::shared_lock rdlock(_tablet->get_header_lock());
+    _tablet->pick_candidate_rowsets_to_base_compaction(&_input_rowsets, rdlock);
     std::sort(_input_rowsets.begin(), _input_rowsets.end(), Rowset::comparator);
     RETURN_NOT_OK(check_version_continuity(_input_rowsets));
     RETURN_NOT_OK(_check_rowset_overlapping(_input_rowsets));

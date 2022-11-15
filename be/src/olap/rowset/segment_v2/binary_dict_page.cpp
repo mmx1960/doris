@@ -17,16 +17,10 @@
 
 #include "olap/rowset/segment_v2/binary_dict_page.h"
 
-#include "common/logging.h"
 #include "gutil/strings/substitute.h" // for Substitute
 #include "runtime/mem_pool.h"
 #include "util/slice.h" // for Slice
 #include "vec/columns/column.h"
-#include "vec/columns/column_dictionary.h"
-#include "vec/columns/column_nullable.h"
-#include "vec/columns/column_string.h"
-#include "vec/columns/column_vector.h"
-#include "vec/columns/predicate_column.h"
 
 namespace doris {
 namespace segment_v2 {
@@ -38,13 +32,14 @@ BinaryDictPageBuilder::BinaryDictPageBuilder(const PageBuilderOptions& options)
           _finished(false),
           _data_page_builder(nullptr),
           _dict_builder(nullptr),
-          _encoding_type(DICT_ENCODING),
-          _pool() {
+          _encoding_type(DICT_ENCODING) {
     // initially use DICT_ENCODING
     // TODO: the data page builder type can be created by Factory according to user config
     _data_page_builder.reset(new BitshufflePageBuilder<OLAP_FIELD_TYPE_INT>(options));
     PageBuilderOptions dict_builder_options;
-    dict_builder_options.data_page_size = _options.dict_page_size;
+    dict_builder_options.data_page_size =
+            std::min(_options.data_page_size, _options.dict_page_size);
+    dict_builder_options.is_dict_page = true;
     _dict_builder.reset(new BinaryPlainPageBuilder<OLAP_FIELD_TYPE_VARCHAR>(dict_builder_options));
     reset();
 }
@@ -78,8 +73,10 @@ Status BinaryDictPageBuilder::add(const uint8_t* vals, size_t* count) {
             if (is_page_full()) {
                 break;
             }
-            auto iter = _dictionary.find(*src);
-            if (iter != _dictionary.end()) {
+
+            if (src->empty() && _has_empty) {
+                value_code = _empty_code;
+            } else if (auto iter = _dictionary.find(*src); iter != _dictionary.end()) {
                 value_code = iter->second;
             } else {
                 Slice dict_item(src->data, src->size);
@@ -100,6 +97,10 @@ Status BinaryDictPageBuilder::add(const uint8_t* vals, size_t* count) {
                     break;
                 }
                 _dictionary.emplace(dict_item, value_code);
+                if (src->empty()) {
+                    _has_empty = true;
+                    _empty_code = value_code;
+                }
             }
             size_t add_count = 1;
             RETURN_IF_ERROR(actual_builder->single_add(
@@ -119,6 +120,10 @@ Status BinaryDictPageBuilder::add(const uint8_t* vals, size_t* count) {
 }
 
 OwnedSlice BinaryDictPageBuilder::finish() {
+    if (VLOG_DEBUG_IS_ON && _encoding_type == DICT_ENCODING) {
+        VLOG_DEBUG << "dict page size:" << _dict_builder->size();
+    }
+
     DCHECK(!_finished);
     _finished = true;
 
@@ -287,8 +292,9 @@ Status BinaryDictPageDecoder::read_by_rowids(const rowid_t* rowids, ordinal_t pa
         data[read_count++] = data_array[ord];
     }
 
-    if (LIKELY(read_count > 0))
+    if (LIKELY(read_count > 0)) {
         dst->insert_many_dict_data(data, 0, _dict_word_info, read_count, _dict_decoder->_num_elems);
+    }
     *n = read_count;
     return Status::OK();
 }

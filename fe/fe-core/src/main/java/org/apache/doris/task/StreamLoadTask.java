@@ -30,6 +30,7 @@ import org.apache.doris.common.UserException;
 import org.apache.doris.common.util.SqlParserUtils;
 import org.apache.doris.common.util.TimeUtils;
 import org.apache.doris.load.loadv2.LoadTask;
+import org.apache.doris.thrift.TFileCompressType;
 import org.apache.doris.thrift.TFileFormatType;
 import org.apache.doris.thrift.TFileType;
 import org.apache.doris.thrift.TStreamLoadPutRequest;
@@ -41,6 +42,8 @@ import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 
 import java.io.StringReader;
+import java.util.Arrays;
+import java.util.List;
 
 public class StreamLoadTask implements LoadTaskInfo {
 
@@ -50,6 +53,7 @@ public class StreamLoadTask implements LoadTaskInfo {
     private long txnId;
     private TFileType fileType;
     private TFileFormatType formatType;
+    private TFileCompressType compressType = TFileCompressType.UNKNOWN;
     private boolean stripOuterArray;
     private boolean numAsString;
     private String jsonPaths;
@@ -76,12 +80,15 @@ public class StreamLoadTask implements LoadTaskInfo {
     private double maxFilterRatio = 0.0;
     private boolean loadToSingleTablet = false;
     private String headerType = "";
+    private List<String> hiddenColumns;
 
-    public StreamLoadTask(TUniqueId id, long txnId, TFileType fileType, TFileFormatType formatType) {
+    public StreamLoadTask(TUniqueId id, long txnId, TFileType fileType, TFileFormatType formatType,
+            TFileCompressType compressType) {
         this.id = id;
         this.txnId = txnId;
         this.fileType = fileType;
         this.formatType = formatType;
+        this.compressType = compressType;
         this.jsonPaths = "";
         this.jsonRoot = "";
         this.stripOuterArray = false;
@@ -104,6 +111,10 @@ public class StreamLoadTask implements LoadTaskInfo {
 
     public TFileFormatType getFormatType() {
         return formatType;
+    }
+
+    public TFileCompressType getCompressType() {
+        return compressType;
     }
 
     public ImportColumnDescs getColumnExprDescs() {
@@ -228,9 +239,15 @@ public class StreamLoadTask implements LoadTaskInfo {
         return sequenceCol;
     }
 
+    @Override
+    public List<String> getHiddenColumns() {
+        return hiddenColumns;
+    }
+
     public static StreamLoadTask fromTStreamLoadPutRequest(TStreamLoadPutRequest request) throws UserException {
         StreamLoadTask streamLoadTask = new StreamLoadTask(request.getLoadId(), request.getTxnId(),
-                                                           request.getFileType(), request.getFormatType());
+                request.getFileType(), request.getFormatType(),
+                request.getCompressType());
         streamLoadTask.setOptionalFromTSLPutRequest(request);
         return streamLoadTask;
     }
@@ -319,6 +336,9 @@ public class StreamLoadTask implements LoadTaskInfo {
         }
         if (request.isSetLoadToSingleTablet()) {
             loadToSingleTablet = request.isLoadToSingleTablet();
+        }
+        if (request.isSetHiddenColumns()) {
+            hiddenColumns = Arrays.asList(request.getHiddenColumns().replaceAll("\\s+", "").split(","));
         }
     }
 

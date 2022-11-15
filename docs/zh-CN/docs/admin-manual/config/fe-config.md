@@ -29,7 +29,7 @@ under the License.
 
 该文档主要介绍 FE 的相关配置项。
 
-FE 的配置文件 `fe.conf` 通常存放在 FE 部署路径的 `conf/` 目录下。 而在 0.14 版本中会引入另一个配置文件 `fe_custom.conf`。该配置文件用于记录用户在运行是动态配置并持久化的配置项。
+FE 的配置文件 `fe.conf` 通常存放在 FE 部署路径的 `conf/` 目录下。 而在 0.14 版本中会引入另一个配置文件 `fe_custom.conf`。该配置文件用于记录用户在运行时动态配置并持久化的配置项。
 
 FE 进程启动后，会先读取 `fe.conf` 中的配置项，之后再读取 `fe_custom.conf` 中的配置项。`fe_custom.conf` 中的配置项会覆盖 `fe.conf` 中相同的配置项。
 
@@ -837,7 +837,7 @@ tablet 状态更新间隔
 默认值：
 
   storage_flood_stage_usage_percent  : 95  (95%)
-  
+
   storage_flood_stage_left_capacity_bytes :  1 * 1024 * 1024 * 1024 (1GB)
 
 是否可以动态配置：true
@@ -1680,12 +1680,6 @@ mysql 中处理任务的最大线程数。
 
 mysql 中处理 io 事件的线程数。
 
-### `mysql_service_nio_enabled`
-
-默认值：true
-
-mysql 服务 nio 选项是否启用，默认启用
-
 ### `query_port`
 
 默认值：9030
@@ -2246,3 +2240,128 @@ load 标签清理器将每隔 `label_clean_interval_second` 运行一次以清�
 是否可以动态配置：false
 
 是否为 Master FE 节点独有的配置项：true
+
+### `bdbje_reserved_disk_bytes`
+
+用于限制 bdbje 能够保留的文件的最大磁盘空间。
+
+默认值：1073741824
+
+是否可以动态配置：false
+
+是否为 Master FE 节点独有的配置项：false
+
+
+
+ FE向BE的BackendService发送rpc请求时的超时时间，单位：毫秒。
+
+默认值：60000
+
+是否可以动态配置：false
+
+是否为 Master FE 节点独有的配置项：true
+
+### `be_exec_version`
+
+用于定义fragment之间传递block的序列化格式。
+
+有时我们的一些代码改动会改变block的数据格式，为了使得BE在滚动升级的过程中能够相互兼容数据格式，我们需要从FE下发一个数据版本来决定以什么格式发送数据。
+
+具体的来说，例如集群中有2个BE，其中一台经过升级能够支持最新的$v_1$，而另一台只支持$v_0$，此时由于FE还未升级，所以统一下发$v_0$，BE之间以旧的数据格式进行交互。待BE都升级完成，我们再升级FE，此时新的FE会下发$v_1$，集群统一切换到新的数据格式。
+
+
+默认值为`max_be_exec_version`，如果有特殊需要，我们可以手动设置将格式版本降低，但不应低于`min_be_exec_version`。
+
+需要注意的是，我们应该始终保持该变量的值处于**所有**BE的`BeExecVersionManager::min_be_exec_version`和`BeExecVersionManager::max_be_exec_version`之间。（也就是说如果一个已经完成更新的集群如果需要降级，应该保证先降级FE再降级BE的顺序，或者手动在设置中将该变量调低再降级BE）
+
+### `max_be_exec_version`
+
+目前支持的最新数据版本，不可修改，应与配套版本的BE中的`BeExecVersionManager::max_be_exec_version`一致。
+
+### `min_be_exec_version`
+
+目前支持的最旧数据版本，不可修改，应与配套版本的BE中的`BeExecVersionManager::min_be_exec_version`一致。
+
+### `max_query_profile_num`
+
+用于设置保存查询的 profile 的最大个数。
+
+默认值：100
+
+是否可以动态配置：true
+
+是否为 Master FE 节点独有的配置项：false
+
+### `disable_backend_black_list`
+
+用于禁止BE黑名单功能。禁止该功能后，如果向BE发送查询请求失败，也不会将这个BE添加到黑名单。
+该参数适用于回归测试环境，以减少偶发的错误导致大量回归测试失败。
+
+默认值：false
+
+是否可以动态配置：true
+
+是否为 Master FE 节点独有的配置项：false
+
+### `max_backend_heartbeat_failure_tolerance_count`
+
+最大可容忍的BE节点心跳失败次数。如果连续心跳失败次数超过这个值，则会将BE状态置为 dead。
+该参数适用于回归测试环境，以减少偶发的心跳失败导致大量回归测试失败。
+
+默认值：1
+
+是否可以动态配置：true
+
+是否为 Master FE 节点独有的配置项：true
+
+
+### `max_replica_count_when_schema_change`
+
+OlapTable在做schema change时，允许的最大副本数，副本数过大会导致FE OOM。
+
+默认值：100000
+
+是否可以动态配置：true
+
+是否为 Master FE 节点独有的配置项：true
+
+### `max_hive_partition_cache_num`
+
+hive partition 的最大缓存数量。
+
+默认值：100000
+
+是否可以动态配置：false
+
+是否为 Master FE 节点独有的配置项：false
+
+### `max_external_file_cache_num`
+
+用于 external 外部表的最大文件缓存数量。
+
+默认值：100000
+
+是否可以动态配置：false
+
+是否为 Master FE 节点独有的配置项：false
+
+### `max_external_schema_cache_num`
+
+用于 external 外部表的最大 schema 缓存数量。
+
+默认值：10000
+
+是否可以动态配置：false
+
+是否为 Master FE 节点独有的配置项：false
+
+### `external_cache_expire_time_minutes_after_access`
+
+设置缓存中的数据，在最后一次访问后多久失效。单位为分钟。
+适用于 External Schema Cache 以及 Hive Partition Cache.
+
+默认值：1440
+
+是否可以动态配置：false
+
+是否为 Master FE 节点独有的配置项：false

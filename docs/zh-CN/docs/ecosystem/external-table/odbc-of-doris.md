@@ -102,16 +102,19 @@ PROPERTIES (
 参数 | 说明
 ---|---
 **hosts** | 外表数据库的IP地址
+**port** | 外表数据库的服务端口号
 **driver** | ODBC外表的Driver名，该名字需要和be/conf/odbcinst.ini中的Driver名一致。
 **odbc_type** | 外表数据库的类型，当前支持oracle, mysql, postgresql
 **user** | 外表数据库的用户名
 **password** | 对应用户的密码信息
-**charset** | 数据库连接使用的字符集
+**charset** | 数据库连接使用的字符集（对sqlserver无效）
 
 备注：
-`PROPERTIES` 中除了可以添加上述参数之外，还支持每个数据库的ODBC driver 实现的专用参数，比如mysql 的`sslverify` 等
+`PROPERTIES` 中除了可以添加上述参数之外，还支持每个数据库的ODBC driver 实现的专用参数，比如mysql 的`sslverify`、sqlserver 的`ClientCharset`等
 
-
+>注意：
+>
+>如果你是SQL Server 2017 及之后的版本，因为SQL Server 2017及之后版本默认开启了安全认证，你需要在定义 ODBC Resources的时候加上 `"TrustServerCertificate"="Yes"`
 
 ##### ODBC Driver的安装和配置
 
@@ -212,6 +215,14 @@ https://download.oracle.com/otn_software/linux/instantclient/1913000/oracle-inst
 https://download.oracle.com/otn_software/linux/instantclient/1913000/oracle-instantclient19.13-basic-19.13.0.0.0-2.x86_64.rpm
 ```
 
+#### 4.SQLServer
+
+| SQLServer版本 | SQLServer ODBC版本 |
+| --------- | -------------- |
+| SQL Server 2016 Enterprise | freetds-1.2.21 |
+
+目前只测试了这一个版本其他版本测试后补充
+
 ### Ubuntu操作系统
 
 使用的unixODBC版本是：2.3.4，Doris 0.15，Ubuntu 20.04
@@ -250,6 +261,14 @@ sudo alien -i  oracle-instantclient19.13-devel-19.13.0.0.0-2.x86_64.rpm
 sudo alien -i  oracle-instantclient19.13-odbc-19.13.0.0.0-2.x86_64.rpm
 sudo alien -i  oracle-instantclient19.13-sqlplus-19.13.0.0.0-2.x86_64.rpm
 ```
+
+#### 4.SQLServer
+
+| SQLServer版本 | SQLServer ODBC版本 |
+| --------- | -------------- |
+| SQL Server 2016 Enterprise | freetds-1.2.21 |
+
+目前只测试了这一个版本其他版本测试后补充
 
 
 ## 类型匹配
@@ -371,3 +390,11 @@ sudo alien -i  oracle-instantclient19.13-sqlplus-19.13.0.0.0-2.x86_64.rpm
 10. 报错`driver connect Err: xxx`
 
     通常是连接数据库失败，Err部分代表了不同的数据库连接失败的报错。这种情况通常是配置存在问题。可以检查是否错配了ip地址，端口或账号密码。
+    
+11. 读写mysql外表的emoji表情出现乱码
+
+    Doris进行odbc外表连接时，默认采用的编码为utf8，由于mysql之中默认的utf8编码为utf8mb3，无法表示需要4字节编码的emoji表情。这里需要在建立mysql外表时设置`charset`=`utf8mb4`，便可以正常读写emoji表情😀。
+
+12. 读写sqlserver外表的编码配置
+
+    由于sqlserver的odbc外表连接时，无法直接通过`charset`来配置编码，用户可以使用`ClientCharset`（for freetds）配置项来设置, 比如 "ClientCharset" = "UTF-8"。

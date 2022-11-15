@@ -39,6 +39,7 @@ import org.apache.doris.common.util.SmallFileMgr;
 import org.apache.doris.common.util.SmallFileMgr.SmallFile;
 import org.apache.doris.common.util.TimeUtils;
 import org.apache.doris.persist.AlterRoutineLoadJobOperationLog;
+import org.apache.doris.thrift.TFileCompressType;
 import org.apache.doris.transaction.TransactionState;
 import org.apache.doris.transaction.TransactionStatus;
 
@@ -463,7 +464,7 @@ public class KafkaRoutineLoadJob extends RoutineLoadJob {
         // get default offset
         long beginOffset = convertedDefaultOffsetToLong();
         for (Integer kafkaPartition : newPartitions) {
-            partitionOffsets.add(Pair.create(kafkaPartition, beginOffset));
+            partitionOffsets.add(Pair.of(kafkaPartition, beginOffset));
         }
         if (isOffsetForTimes()) {
             try {
@@ -722,6 +723,11 @@ public class KafkaRoutineLoadJob extends RoutineLoadJob {
         Map<Integer, Long> partitionIdToOffsetLag = ((KafkaProgress) progress).getLag(cachedPartitionWithLatestOffsets);
         Gson gson = new Gson();
         return gson.toJson(partitionIdToOffsetLag);
+    }
+
+    @Override
+    public TFileCompressType getCompressType() {
+        return TFileCompressType.PLAIN;
     }
 
     @Override

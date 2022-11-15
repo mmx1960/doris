@@ -15,7 +15,7 @@
 -- specific language governing permissions and limitations
 -- under the License.
 
-CREATE TABLE `lineorder_flat` (
+CREATE TABLE IF NOT EXISTS `lineorder_flat` (
   `LO_ORDERDATE` int(11) NOT NULL COMMENT "",
   `LO_ORDERKEY` int(11) NOT NULL COMMENT "",
   `LO_LINENUMBER` tinyint(4) NOT NULL COMMENT "",
@@ -31,7 +31,7 @@ CREATE TABLE `lineorder_flat` (
   `LO_REVENUE` int(11) NOT NULL COMMENT "",
   `LO_SUPPLYCOST` int(11) NOT NULL COMMENT "",
   `LO_TAX` tinyint(4) NOT NULL COMMENT "",
-  `LO_COMMITDATE` date NOT NULL COMMENT "",
+  `LO_COMMITDATE` datev2 NOT NULL COMMENT "",
   `LO_SHIPMODE` varchar(100) NOT NULL COMMENT "",
   `C_NAME` varchar(100) NOT NULL COMMENT "",
   `C_ADDRESS` varchar(100) NOT NULL COMMENT "",

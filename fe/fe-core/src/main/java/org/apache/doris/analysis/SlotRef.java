@@ -26,6 +26,7 @@ import org.apache.doris.catalog.Type;
 import org.apache.doris.common.AnalysisException;
 import org.apache.doris.common.io.Text;
 import org.apache.doris.common.util.ToSqlContext;
+import org.apache.doris.qe.ConnectContext;
 import org.apache.doris.thrift.TExprNode;
 import org.apache.doris.thrift.TExprNodeType;
 import org.apache.doris.thrift.TSlotRef;
@@ -33,6 +34,7 @@ import org.apache.doris.thrift.TSlotRef;
 import com.google.common.base.MoreObjects;
 import com.google.common.base.Objects;
 import com.google.common.base.Preconditions;
+import org.apache.commons.lang3.StringUtils;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 
@@ -188,6 +190,10 @@ public class SlotRef extends Expr {
         if (type.equals(Type.BOOLEAN)) {
             selectivity = DEFAULT_SELECTIVITY;
         }
+        if (tblName == null && StringUtils.isNotEmpty(desc.getParent().getLastAlias())
+                && !desc.getParent().getLastAlias().equals(desc.getParent().getTable().getName())) {
+            tblName = new TableName(null, null, desc.getParent().getLastAlias());
+        }
     }
 
     @Override
@@ -205,9 +211,16 @@ public class SlotRef extends Expr {
         StringBuilder sb = new StringBuilder();
 
         if (tblName != null) {
-            return tblName.toSql() + "." + label + sb.toString();
+            return tblName.toSql() + "." + label;
         } else if (label != null) {
-            return label + sb.toString();
+            if (ConnectContext.get() != null
+                    && ConnectContext.get().getSessionVariable() != null
+                    && ConnectContext.get().getSessionVariable().isEnableNereidsPlanner()
+                    && desc != null) {
+                return label + "[#" + desc.getId().asInt() + "]";
+            } else {
+                return label;
+            }
         } else if (desc.getSourceExprs() != null) {
             if (ToSqlContext.get() == null || ToSqlContext.get().isNeedSlotRefId()) {
                 if (desc.getId().asInt() != 1) {
@@ -347,6 +360,18 @@ public class SlotRef extends Expr {
         }
         for (Expr sourceExpr : desc.getSourceExprs()) {
             sourceExpr.getSlotRefsBoundByTupleIds(tupleIds, boundSlotRefs);
+        }
+    }
+
+    @Override
+    public Expr getRealSlotRef() {
+        Preconditions.checkState(!type.equals(Type.INVALID));
+        Preconditions.checkState(desc != null);
+        if (!desc.getSourceExprs().isEmpty()
+                && desc.getSourceExprs().get(0) instanceof SlotRef) {
+            return desc.getSourceExprs().get(0);
+        } else {
+            return this;
         }
     }
 

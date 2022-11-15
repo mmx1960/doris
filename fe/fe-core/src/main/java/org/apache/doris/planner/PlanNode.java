@@ -49,8 +49,7 @@ import com.google.common.base.Preconditions;
 import com.google.common.base.Predicates;
 import com.google.common.collect.Lists;
 import com.google.common.collect.Sets;
-import org.apache.logging.log4j.LogManager;
-import org.apache.logging.log4j.Logger;
+import org.apache.commons.collections.CollectionUtils;
 
 import java.util.ArrayList;
 import java.util.Collection;
@@ -74,7 +73,6 @@ import java.util.Set;
  * its children (= are bound by tupleIds).
  */
 public abstract class PlanNode extends TreeNode<PlanNode> implements PlanStats {
-    private static final Logger LOG = LogManager.getLogger(PlanNode.class);
 
     protected String planNodeName;
 
@@ -141,6 +139,10 @@ public abstract class PlanNode extends TreeNode<PlanNode> implements PlanStats {
 
     protected StatisticalType statisticalType = StatisticalType.DEFAULT;
     protected StatsDeriveResult statsDeriveResult;
+
+    protected TupleDescriptor outputTupleDesc;
+
+    protected List<Expr> projectList;
 
     protected PlanNode(PlanNodeId id, ArrayList<TupleId> tupleIds, String planNodeName,
             StatisticalType statisticalType) {
@@ -265,6 +267,10 @@ public abstract class PlanNode extends TreeNode<PlanNode> implements PlanStats {
         return limit > -1;
     }
 
+    public void setCardinality(long cardinality) {
+        this.cardinality = cardinality;
+    }
+
     public long getCardinality() {
         return cardinality;
     }
@@ -344,7 +350,7 @@ public abstract class PlanNode extends TreeNode<PlanNode> implements PlanStats {
         return statsDeriveResultList;
     }
 
-    void initCompoundPredicate(Expr expr) {
+    protected void initCompoundPredicate(Expr expr) {
         if (expr instanceof CompoundPredicate) {
             CompoundPredicate compoundPredicate = (CompoundPredicate) expr;
             compoundPredicate.setType(Type.BOOLEAN);
@@ -362,7 +368,7 @@ public abstract class PlanNode extends TreeNode<PlanNode> implements PlanStats {
         }
     }
 
-    Expr convertConjunctsToAndCompoundPredicate(List<Expr> conjuncts) {
+    protected Expr convertConjunctsToAndCompoundPredicate(List<Expr> conjuncts) {
         List<Expr> targetConjuncts = Lists.newArrayList(conjuncts);
         while (targetConjuncts.size() > 1) {
             List<Expr> newTargetConjuncts = Lists.newArrayList();
@@ -473,6 +479,11 @@ public abstract class PlanNode extends TreeNode<PlanNode> implements PlanStats {
         if (limit != -1) {
             expBuilder.append(detailPrefix + "limit: " + limit + "\n");
         }
+        if (!CollectionUtils.isEmpty(projectList)) {
+            expBuilder.append(detailPrefix).append("projections: ").append(getExplainString(projectList)).append("\n");
+            expBuilder.append(detailPrefix).append("project output tuple id: ")
+                    .append(outputTupleDesc.getId().asInt()).append("\n");
+        }
         // Output Tuple Ids only when explain plan level is set to verbose
         if (detailLevel.equals(TExplainLevel.VERBOSE)) {
             expBuilder.append(detailPrefix + "tuple ids: ");
@@ -550,6 +561,14 @@ public abstract class PlanNode extends TreeNode<PlanNode> implements PlanStats {
         }
         toThrift(msg);
         container.addToNodes(msg);
+        if (projectList != null) {
+            for (Expr expr : projectList) {
+                msg.addToProjections(expr.treeToThrift());
+            }
+        }
+        if (outputTupleDesc != null) {
+            msg.setOutputTupleId(outputTupleDesc.getId().asInt());
+        }
         if (this instanceof ExchangeNode) {
             msg.num_children = 0;
             return;
@@ -857,7 +876,7 @@ public abstract class PlanNode extends TreeNode<PlanNode> implements PlanStats {
     private void applySelectivity() {
         double selectivity = computeSelectivity();
         Preconditions.checkState(cardinality >= 0);
-        long preConjunctCardinality = cardinality;
+        double preConjunctCardinality = cardinality;
         cardinality = Math.round(cardinality * selectivity);
         // don't round cardinality down to zero for safety.
         if (cardinality == 0 && preConjunctCardinality > 0) {
@@ -899,7 +918,7 @@ public abstract class PlanNode extends TreeNode<PlanNode> implements PlanStats {
         runtimeFilters.clear();
     }
 
-    protected String getRuntimeFilterExplainString(boolean isBuildNode) {
+    protected String getRuntimeFilterExplainString(boolean isBuildNode, boolean isBrief) {
         if (runtimeFilters.isEmpty()) {
             return "";
         }
@@ -907,19 +926,25 @@ public abstract class PlanNode extends TreeNode<PlanNode> implements PlanStats {
         for (RuntimeFilter filter : runtimeFilters) {
             StringBuilder filterStr = new StringBuilder();
             filterStr.append(filter.getFilterId());
-            filterStr.append("[");
-            filterStr.append(filter.getType().toString().toLowerCase());
-            filterStr.append("]");
-            if (isBuildNode) {
-                filterStr.append(" <- ");
-                filterStr.append(filter.getSrcExpr().toSql());
-            } else {
-                filterStr.append(" -> ");
-                filterStr.append(filter.getTargetExpr(getId()).toSql());
+            if (!isBrief) {
+                filterStr.append("[");
+                filterStr.append(filter.getType().toString().toLowerCase());
+                filterStr.append("]");
+                if (isBuildNode) {
+                    filterStr.append(" <- ");
+                    filterStr.append(filter.getSrcExpr().toSql());
+                } else {
+                    filterStr.append(" -> ");
+                    filterStr.append(filter.getTargetExpr(getId()).toSql());
+                }
             }
             filtersStr.add(filterStr.toString());
         }
         return Joiner.on(", ").join(filtersStr) + "\n";
+    }
+
+    protected String getRuntimeFilterExplainString(boolean isBuildNode) {
+        return getRuntimeFilterExplainString(isBuildNode, false);
     }
 
     public void convertToVectoriezd() {
@@ -1008,5 +1033,21 @@ public abstract class PlanNode extends TreeNode<PlanNode> implements PlanStats {
      */
     public void finalizeForNereids() {
 
+    }
+
+    public void setOutputTupleDesc(TupleDescriptor outputTupleDesc) {
+        this.outputTupleDesc = outputTupleDesc;
+    }
+
+    public TupleDescriptor getOutputTupleDesc() {
+        return outputTupleDesc;
+    }
+
+    public void setProjectList(List<Expr> projectList) {
+        this.projectList = projectList;
+    }
+
+    public List<Expr> getProjectList() {
+        return projectList;
     }
 }

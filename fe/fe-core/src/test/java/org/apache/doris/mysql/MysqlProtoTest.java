@@ -21,11 +21,12 @@ import org.apache.doris.analysis.UserIdentity;
 import org.apache.doris.catalog.Database;
 import org.apache.doris.catalog.Env;
 import org.apache.doris.cluster.ClusterNamespace;
+import org.apache.doris.common.AuthenticationException;
 import org.apache.doris.common.DdlException;
 import org.apache.doris.common.LdapConfig;
 import org.apache.doris.datasource.InternalCatalog;
 import org.apache.doris.ldap.LdapAuthenticate;
-import org.apache.doris.ldap.LdapClient;
+import org.apache.doris.ldap.LdapManager;
 import org.apache.doris.mysql.privilege.PaloAuth;
 import org.apache.doris.mysql.privilege.PrivPredicate;
 import org.apache.doris.qe.ConnectContext;
@@ -58,14 +59,14 @@ public class MysqlProtoTest {
     @Mocked
     private PaloAuth auth;
     @Mocked
-    private LdapClient ldapClient;
+    private LdapManager ldapManager;
     @Mocked
     private LdapAuthenticate ldapAuthenticate;
     @Mocked
     private MysqlClearTextPacket clearTextPacket;
 
     @Before
-    public void setUp() throws DdlException {
+    public void setUp() throws DdlException, AuthenticationException {
 
         // mock auth
         new Expectations() {
@@ -77,11 +78,11 @@ public class MysqlProtoTest {
                 auth.checkPassword(anyString, anyString, (byte[]) any, (byte[]) any, (List<UserIdentity>) any);
                 minTimes = 0;
                 result = new Delegate() {
-                    boolean fakeCheckPassword(String remoteUser, String remoteHost, byte[] remotePasswd,
+                    void fakeCheckPassword(String remoteUser, String remoteHost, byte[] remotePasswd,
                             byte[] randomString, List<UserIdentity> currentUser) {
                         UserIdentity userIdentity = new UserIdentity("default_cluster:user", "192.168.1.1");
                         currentUser.add(userIdentity);
-                        return true;
+                        return;
                     }
                 };
 
@@ -219,7 +220,11 @@ public class MysqlProtoTest {
                     }
                 };
 
-                LdapClient.doesUserExist(anyString);
+                ldapManager.checkUserPasswd(anyString, anyString);
+                minTimes = 0;
+                result = userExist;
+
+                ldapManager.doesUserExist(anyString);
                 minTimes = 0;
                 result = userExist;
             }
@@ -276,6 +281,7 @@ public class MysqlProtoTest {
         context.setEnv(env);
         context.setThreadLocalInfo();
         Assert.assertTrue(MysqlProto.negotiate(context));
+        LdapConfig.ldap_authentication_enabled = false;
     }
 
     @Test
@@ -289,6 +295,7 @@ public class MysqlProtoTest {
         context.setEnv(env);
         context.setThreadLocalInfo();
         Assert.assertFalse(MysqlProto.negotiate(context));
+        LdapConfig.ldap_authentication_enabled = false;
     }
 
     @Test
@@ -302,6 +309,7 @@ public class MysqlProtoTest {
         context.setEnv(env);
         context.setThreadLocalInfo();
         Assert.assertTrue(MysqlProto.negotiate(context));
+        LdapConfig.ldap_authentication_enabled = false;
     }
 
     @Test

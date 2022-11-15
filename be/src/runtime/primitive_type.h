@@ -19,6 +19,7 @@
 
 #include <string>
 
+#include "runtime/define_primitive_type.h"
 #include "vec/columns/column_decimal.h"
 #include "vec/columns/columns_number.h"
 #include "vec/core/types.h"
@@ -27,55 +28,74 @@ namespace doris {
 
 namespace vectorized {
 class ColumnString;
-}
+class ColumnJsonb;
+} // namespace vectorized
 
 class DateTimeValue;
 class DecimalV2Value;
 struct StringValue;
-
-enum PrimitiveType {
-    INVALID_TYPE = 0,
-    TYPE_NULL,     /* 1 */
-    TYPE_BOOLEAN,  /* 2 */
-    TYPE_TINYINT,  /* 3 */
-    TYPE_SMALLINT, /* 4 */
-    TYPE_INT,      /* 5 */
-    TYPE_BIGINT,   /* 6 */
-    TYPE_LARGEINT, /* 7 */
-    TYPE_FLOAT,    /* 8 */
-    TYPE_DOUBLE,   /* 9 */
-    TYPE_VARCHAR,  /* 10 */
-    TYPE_DATE,     /* 11 */
-    TYPE_DATETIME, /* 12 */
-    TYPE_BINARY,
-    /* 13 */                     // Not implemented
-    TYPE_DECIMAL [[deprecated]], /* 14 */
-    TYPE_CHAR,                   /* 15 */
-
-    TYPE_STRUCT,    /* 16 */
-    TYPE_ARRAY,     /* 17 */
-    TYPE_MAP,       /* 18 */
-    TYPE_HLL,       /* 19 */
-    TYPE_DECIMALV2, /* 20 */
-
-    TYPE_TIME,           /* 21 */
-    TYPE_OBJECT,         /* 22 */
-    TYPE_STRING,         /* 23 */
-    TYPE_QUANTILE_STATE, /* 24 */
-    TYPE_DATEV2,         /* 25 */
-    TYPE_DATETIMEV2,     /* 26 */
-    TYPE_TIMEV2,         /* 27 */
-    TYPE_DECIMAL32,      /* 28 */
-    TYPE_DECIMAL64,      /* 29 */
-    TYPE_DECIMAL128,     /* 30 */
-};
+struct JsonBinaryValue;
 
 PrimitiveType convert_type_to_primitive(FunctionContext::Type type);
 
-bool is_enumeration_type(PrimitiveType type);
-bool is_date_type(PrimitiveType type);
-bool is_string_type(PrimitiveType type);
-bool has_variable_type(PrimitiveType type);
+constexpr bool is_enumeration_type(PrimitiveType type) {
+    switch (type) {
+    case TYPE_FLOAT:
+    case TYPE_DOUBLE:
+    case TYPE_NULL:
+    case TYPE_CHAR:
+    case TYPE_VARCHAR:
+    case TYPE_STRING:
+    case TYPE_DATETIME:
+    case TYPE_DATETIMEV2:
+    case TYPE_TIMEV2:
+    case TYPE_DECIMALV2:
+    case TYPE_DECIMAL32:
+    case TYPE_DECIMAL64:
+    case TYPE_DECIMAL128:
+    case TYPE_BOOLEAN:
+    case TYPE_ARRAY:
+    case TYPE_HLL:
+        return false;
+    case TYPE_TINYINT:
+    case TYPE_SMALLINT:
+    case TYPE_INT:
+    case TYPE_BIGINT:
+    case TYPE_LARGEINT:
+    case TYPE_DATE:
+    case TYPE_DATEV2:
+        return true;
+
+    case INVALID_TYPE:
+    default:
+        DCHECK(false);
+    }
+
+    return false;
+}
+
+constexpr bool is_date_type(PrimitiveType type) {
+    return type == TYPE_DATETIME || type == TYPE_DATE || type == TYPE_DATETIMEV2 ||
+           type == TYPE_DATEV2;
+}
+
+constexpr bool is_string_type(PrimitiveType type) {
+    return type == TYPE_CHAR || type == TYPE_VARCHAR || type == TYPE_STRING;
+}
+
+constexpr bool is_float_or_double(PrimitiveType type) {
+    return type == TYPE_FLOAT || type == TYPE_DOUBLE;
+}
+
+constexpr bool is_int_or_bool(PrimitiveType type) {
+    return type == TYPE_BOOLEAN || type == TYPE_TINYINT || type == TYPE_SMALLINT ||
+           type == TYPE_INT || type == TYPE_BIGINT || type == TYPE_LARGEINT;
+}
+
+constexpr bool has_variable_type(PrimitiveType type) {
+    return type == TYPE_CHAR || type == TYPE_VARCHAR || type == TYPE_OBJECT ||
+           type == TYPE_QUANTILE_STATE || type == TYPE_STRING;
+}
 
 // Returns the byte size of 'type'  Returns 0 for variable length types.
 int get_byte_size(PrimitiveType type);
@@ -209,6 +229,13 @@ struct PrimitiveTypeTraits<TYPE_HLL> {
     using ColumnType = vectorized::ColumnString;
 };
 
+template <>
+struct PrimitiveTypeTraits<TYPE_JSONB> {
+    using CppType = JsonBinaryValue;
+    using ColumnType = vectorized::ColumnJsonb;
+};
+
+// only for adapt get_predicate_column_ptr
 template <PrimitiveType type>
 struct PredicatePrimitiveTypeTraits {
     using PredicateFieldType = typename PrimitiveTypeTraits<type>::CppType;

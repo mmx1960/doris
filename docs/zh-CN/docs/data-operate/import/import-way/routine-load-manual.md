@@ -146,8 +146,9 @@ CREATE ROUTINE LOAD example_db.test1 ON example_tbl
 
    ```json
    [
-       {"category":"11",
-           "title":"SayingsoftheCentury",
+       {   
+           "category":"11",
+           "author":"4avc",
            "price":895,
            "timestamp":1589191587
        },
@@ -160,14 +161,14 @@ CREATE ROUTINE LOAD example_db.test1 ON example_tbl
        {
            "category":"33",
            "author":"3avc",
-           "title":"SayingsoftheCentury",
+           "price":342,
            "timestamp":1589191387
        }
    ]
    ```
-
+   
    创建待导入的Doris数据表
-
+   
    ```sql
    CREATE TABLE `example_tbl` (
       `category` varchar(24) NULL COMMENT "",
@@ -190,9 +191,9 @@ CREATE ROUTINE LOAD example_db.test1 ON example_tbl
        "replication_num" = "1"
    );
    ```
-
+   
    以简单模式导入json数据
-
+   
    ```sql
    CREATE ROUTINE LOAD example_db.test_json_label_1 ON table1
    COLUMNS(category,price,author)
@@ -213,9 +214,9 @@ CREATE ROUTINE LOAD example_db.test1 ON example_tbl
    	"kafka_offsets" = "0,0,0"
     );
    ```
-
+   
    精准导入json格式数据
-
+   
    ```sql
    CREATE ROUTINE LOAD example_db.test1 ON example_tbl
    COLUMNS(category, author, price, timestamp, dt=from_unixtime(timestamp, '%Y%m%d'))
@@ -238,6 +239,10 @@ CREATE ROUTINE LOAD example_db.test1 ON example_tbl
        "kafka_offsets" = "0,0,0"
    );
    ```
+
+**注意：** 表里的分区字段 `dt`  在我们的数据里并没有，而是在我们Routine load 语句里通过 `dt=from_unixtime(timestamp, '%Y%m%d')` 转换出来的
+
+
 
 **strict mode 与 source data 的导入关系**
 
@@ -391,13 +396,9 @@ CREATE ROUTINE LOAD example_db.test1 ON example_tbl
 
    BE 配置项，默认为 3。该参数表示一个子任务中最多生成几个 consumer 进行数据消费。对于 Kafka 数据源，一个 consumer 可能消费一个或多个 kafka partition。假设一个任务需要消费 6 个 kafka partition，则会生成 3 个 consumer，每个 consumer 消费 2 个 partition。如果只有 2 个 partition，则只会生成 2 个 consumer，每个 consumer 消费 1 个 partition。
 
-5. push_write_mbytes_per_sec
+5. max_tolerable_backend_down_num FE 配置项，默认值是0。在满足某些条件下，Doris可PAUSED的任务重新调度，即变成RUNNING。该参数为0代表只有所有BE节点是alive状态才允许重新调度。
 
-   BE 配置项。默认为 10，即 10MB/s。该参数为导入通用参数，不限于例行导入作业。该参数限制了导入数据写入磁盘的速度。对于 SSD 等高性能存储设备，可以适当增加这个限速。
-
-6. max_tolerable_backend_down_num FE 配置项，默认值是0。在满足某些条件下，Doris可PAUSED的任务重新调度，即变成RUNNING。该参数为0代表只有所有BE节点是alive状态才允许重新调度。
-
-7. period_of_auto_resume_min FE 配置项，默认是5分钟。Doris重新调度，只会在5分钟这个周期内，最多尝试3次. 如果3次都失败则锁定当前任务，后续不在进行调度。但可通过人为干预，进行手动恢复。
+6. period_of_auto_resume_min FE 配置项，默认是5分钟。Doris重新调度，只会在5分钟这个周期内，最多尝试3次. 如果3次都失败则锁定当前任务，后续不在进行调度。但可通过人为干预，进行手动恢复。
 
 ## 更多帮助
 

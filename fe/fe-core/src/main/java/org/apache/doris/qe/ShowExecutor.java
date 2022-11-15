@@ -17,6 +17,7 @@
 
 package org.apache.doris.qe;
 
+import org.apache.doris.analysis.AdminCopyTabletStmt;
 import org.apache.doris.analysis.AdminDiagnoseTabletStmt;
 import org.apache.doris.analysis.AdminShowConfigStmt;
 import org.apache.doris.analysis.AdminShowReplicaDistributionStmt;
@@ -31,6 +32,7 @@ import org.apache.doris.analysis.ShowAuthorStmt;
 import org.apache.doris.analysis.ShowBackendsStmt;
 import org.apache.doris.analysis.ShowBackupStmt;
 import org.apache.doris.analysis.ShowBrokerStmt;
+import org.apache.doris.analysis.ShowCatalogRecycleBinStmt;
 import org.apache.doris.analysis.ShowCatalogStmt;
 import org.apache.doris.analysis.ShowClusterStmt;
 import org.apache.doris.analysis.ShowCollationStmt;
@@ -58,6 +60,8 @@ import org.apache.doris.analysis.ShowLastInsertStmt;
 import org.apache.doris.analysis.ShowLoadProfileStmt;
 import org.apache.doris.analysis.ShowLoadStmt;
 import org.apache.doris.analysis.ShowLoadWarningsStmt;
+import org.apache.doris.analysis.ShowMTMVJobStmt;
+import org.apache.doris.analysis.ShowMTMVTaskStmt;
 import org.apache.doris.analysis.ShowMigrationsStmt;
 import org.apache.doris.analysis.ShowPartitionIdStmt;
 import org.apache.doris.analysis.ShowPartitionsStmt;
@@ -133,6 +137,7 @@ import org.apache.doris.common.DdlException;
 import org.apache.doris.common.ErrorCode;
 import org.apache.doris.common.ErrorReport;
 import org.apache.doris.common.FeConstants;
+import org.apache.doris.common.MarkedCountDownLatch;
 import org.apache.doris.common.MetaNotFoundException;
 import org.apache.doris.common.PatternMatcher;
 import org.apache.doris.common.proc.BackendsProcDir;
@@ -167,13 +172,21 @@ import org.apache.doris.load.LoadErrorHub.HubType;
 import org.apache.doris.load.LoadJob;
 import org.apache.doris.load.LoadJob.JobState;
 import org.apache.doris.load.routineload.RoutineLoadJob;
+import org.apache.doris.mtmv.MTMVJobManager;
+import org.apache.doris.mtmv.metadata.MTMVJob;
+import org.apache.doris.mtmv.metadata.MTMVTask;
 import org.apache.doris.mysql.privilege.PrivPredicate;
 import org.apache.doris.statistics.StatisticsJobManager;
 import org.apache.doris.system.Backend;
 import org.apache.doris.system.Diagnoser;
 import org.apache.doris.system.SystemInfoService;
+import org.apache.doris.task.AgentBatchTask;
 import org.apache.doris.task.AgentClient;
+import org.apache.doris.task.AgentTaskExecutor;
+import org.apache.doris.task.AgentTaskQueue;
+import org.apache.doris.task.SnapshotTask;
 import org.apache.doris.thrift.TCheckStorageFormatResult;
+import org.apache.doris.thrift.TTaskType;
 import org.apache.doris.thrift.TUnit;
 import org.apache.doris.transaction.GlobalTransactionMgr;
 import org.apache.doris.transaction.TransactionStatus;
@@ -199,6 +212,8 @@ import java.util.Comparator;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
+import java.util.concurrent.TimeUnit;
+import java.util.function.Predicate;
 import java.util.stream.Collectors;
 
 // Execute one show statement.
@@ -361,6 +376,14 @@ public class ShowExecutor {
             handleShowCatalogs();
         } else if (stmt instanceof ShowAnalyzeStmt) {
             handleShowAnalyze();
+        } else if (stmt instanceof AdminCopyTabletStmt) {
+            handleCopyTablet();
+        } else if (stmt instanceof ShowCatalogRecycleBinStmt) {
+            handleShowCatalogRecycleBin();
+        } else if (stmt instanceof ShowMTMVJobStmt) {
+            handleMTMVJobs();
+        } else if (stmt instanceof ShowMTMVTaskStmt) {
+            handleMTMVTasks();
         } else {
             handleEmtpy();
         }
@@ -800,6 +823,10 @@ public class ShowExecutor {
                 rows.add(row);
             }
         }
+        // sort by table name
+        rows.sort((x, y) -> {
+            return x.get(0).compareTo(y.get(0));
+        });
         resultSet = new ShowResultSet(showStmt.getMetaData(), rows);
     }
 
@@ -849,7 +876,7 @@ public class ShowExecutor {
                 return;
             }
             List<String> createTableStmt = Lists.newArrayList();
-            Env.getDdlStmt(table, createTableStmt, null, null, false, true /* hide password */);
+            Env.getDdlStmt(table, createTableStmt, null, null, false, true /* hide password */, -1L);
             if (createTableStmt.isEmpty()) {
                 resultSet = new ShowResultSet(showStmt.getMetaData(), rows);
                 return;
@@ -864,7 +891,9 @@ public class ShowExecutor {
                                                         showStmt.getTable(), "VIEW");
                 }
                 rows.add(Lists.newArrayList(table.getName(), createTableStmt.get(0)));
-                resultSet = new ShowResultSet(showStmt.getMetaData(), rows);
+                resultSet = table.getType() != TableType.MATERIALIZED_VIEW
+                        ? new ShowResultSet(showStmt.getMetaData(), rows)
+                        : new ShowResultSet(ShowCreateTableStmt.getMaterializedViewMetaData(), rows);
             }
         } catch (MetaNotFoundException e) {
             throw new AnalysisException(e.getMessage());
@@ -943,7 +972,7 @@ public class ShowExecutor {
             for (Index index : indexes) {
                 rows.add(Lists.newArrayList(showStmt.getTableName().toString(), "", index.getIndexName(),
                         "", String.join(",", index.getColumns()), "", "", "", "",
-                        "", index.getIndexType().name(), index.getComment()));
+                        "", index.getIndexType().name(), index.getComment(), index.getPropertiesString()));
             }
         } finally {
             table.readUnlock();
@@ -960,7 +989,7 @@ public class ShowExecutor {
             view.readLock();
             try {
                 List<String> createViewStmt = Lists.newArrayList();
-                Env.getDdlStmt(view, createViewStmt, null, null, false, true /* hide password */);
+                Env.getDdlStmt(view, createViewStmt, null, null, false, true /* hide password */, -1L);
                 if (!createViewStmt.isEmpty()) {
                     rows.add(Lists.newArrayList(view.getName(), createViewStmt.get(0)));
                 }
@@ -2259,9 +2288,158 @@ public class ShowExecutor {
 
     private void handleShowAnalyze() throws AnalysisException {
         ShowAnalyzeStmt showStmt = (ShowAnalyzeStmt) stmt;
-        StatisticsJobManager jobManager = Env.getCurrentEnv()
-                .getStatisticsJobManager();
+        StatisticsJobManager jobManager = Env.getCurrentEnv().getStatisticsJobManager();
         List<List<String>> results = jobManager.getAnalyzeJobInfos(showStmt);
+        resultSet = new ShowResultSet(showStmt.getMetaData(), results);
+    }
+
+    private void handleCopyTablet() throws AnalysisException {
+        AdminCopyTabletStmt copyStmt = (AdminCopyTabletStmt) stmt;
+        long tabletId = copyStmt.getTabletId();
+        long version = copyStmt.getVersion();
+        long backendId = copyStmt.getBackendId();
+
+        TabletInvertedIndex invertedIndex = Env.getCurrentInvertedIndex();
+        TabletMeta tabletMeta = invertedIndex.getTabletMeta(tabletId);
+        if (tabletMeta == null) {
+            throw new AnalysisException("Unknown tablet: " + tabletId);
+        }
+
+        // 1. find replica
+        Replica replica = null;
+        if (backendId != -1) {
+            replica = invertedIndex.getReplica(tabletId, backendId);
+        } else {
+            List<Replica> replicas = invertedIndex.getReplicasByTabletId(tabletId);
+            if (!replicas.isEmpty()) {
+                replica = replicas.get(0);
+            }
+        }
+        if (replica == null) {
+            throw new AnalysisException("Replica not found on backend: " + backendId);
+        }
+        backendId = replica.getBackendId();
+        Backend be = Env.getCurrentSystemInfo().getBackend(backendId);
+        if (be == null || !be.isAlive()) {
+            throw new AnalysisException("Unavailable backend: " + backendId);
+        }
+
+        // 2. find version
+        if (version != -1 && replica.getVersion() < version) {
+            throw new AnalysisException("Version is larger than replica max version: " + replica.getVersion());
+        }
+        version = version == -1 ? replica.getVersion() : version;
+
+        // 3. get create table stmt
+        Database db = Env.getCurrentInternalCatalog().getDbOrAnalysisException(tabletMeta.getDbId());
+        OlapTable tbl = (OlapTable) db.getTableNullable(tabletMeta.getTableId());
+        if (tbl == null) {
+            throw new AnalysisException("Failed to find table: " + tabletMeta.getTableId());
+        }
+
+        List<String> createTableStmt = Lists.newArrayList();
+        tbl.readLock();
+        try {
+            Env.getDdlStmt(tbl, createTableStmt, null, null, false, true /* hide password */, version);
+        } finally {
+            tbl.readUnlock();
+        }
+
+        // 4. create snapshot task
+        SnapshotTask task = new SnapshotTask(null, backendId, tabletId, -1, tabletMeta.getDbId(),
+                tabletMeta.getTableId(), tabletMeta.getPartitionId(), tabletMeta.getIndexId(), tabletId, version, 0,
+                copyStmt.getExpirationMinutes() * 60 * 1000, false);
+        task.setIsCopyTabletTask(true);
+        MarkedCountDownLatch<Long, Long> countDownLatch = new MarkedCountDownLatch<Long, Long>(1);
+        countDownLatch.addMark(backendId, tabletId);
+        task.setCountDownLatch(countDownLatch);
+
+        // 5. send task and wait
+        AgentBatchTask batchTask = new AgentBatchTask();
+        batchTask.addTask(task);
+        try {
+            AgentTaskQueue.addBatchTask(batchTask);
+            AgentTaskExecutor.submit(batchTask);
+
+            boolean ok = false;
+            try {
+                ok = countDownLatch.await(10, TimeUnit.SECONDS);
+            } catch (InterruptedException e) {
+                LOG.warn("InterruptedException: ", e);
+                ok = false;
+            }
+
+            if (!ok) {
+                throw new AnalysisException(
+                        "Failed to make snapshot for tablet " + tabletId + " on backend: " + backendId);
+            }
+
+            // send result
+            List<List<String>> resultRowSet = Lists.newArrayList();
+            List<String> row = Lists.newArrayList();
+            row.add(String.valueOf(tabletId));
+            row.add(String.valueOf(backendId));
+            row.add(be.getHost());
+            row.add(task.getResultSnapshotPath());
+            row.add(String.valueOf(copyStmt.getExpirationMinutes()));
+            row.add(createTableStmt.get(0));
+            resultRowSet.add(row);
+
+            ShowResultSetMetaData showMetaData = copyStmt.getMetaData();
+            resultSet = new ShowResultSet(showMetaData, resultRowSet);
+        } finally {
+            AgentTaskQueue.removeBatchTask(batchTask, TTaskType.MAKE_SNAPSHOT);
+        }
+    }
+
+    private void handleShowCatalogRecycleBin() throws AnalysisException {
+        ShowCatalogRecycleBinStmt showStmt = (ShowCatalogRecycleBinStmt) stmt;
+
+        Predicate<String> predicate = showStmt.getNamePredicate();
+        List<List<String>> infos = Env.getCurrentRecycleBin().getInfo().stream()
+                .filter(x -> predicate.test(x.get(1)))
+                .collect(Collectors.toList());
+
+        resultSet = new ShowResultSet(showStmt.getMetaData(), infos);
+    }
+
+    private void handleMTMVJobs() throws AnalysisException {
+        ShowMTMVJobStmt showStmt = (ShowMTMVJobStmt) stmt;
+        MTMVJobManager jobManager = Env.getCurrentEnv().getMTMVJobManager();
+        List<MTMVJob> jobs = Lists.newArrayList();
+        if (showStmt.isShowAllJobs()) {
+            jobs.addAll(jobManager.showAllJobs());
+        } else if (showStmt.isShowAllJobsFromDb()) {
+            jobs.addAll(jobManager.showJobs(showStmt.getDbName()));
+        } else if (showStmt.isShowAllJobsOnMv()) {
+            jobs.addAll(jobManager.showJobs(showStmt.getDbName(), showStmt.getMVName()));
+        } else if (showStmt.isSpecificJob()) {
+            jobs.add(jobManager.getJob(showStmt.getJobName()));
+        }
+        List<List<String>> results = Lists.newArrayList();
+        for (MTMVJob job : jobs) {
+            results.add(job.toStringRow());
+        }
+        resultSet = new ShowResultSet(showStmt.getMetaData(), results);
+    }
+
+    private void handleMTMVTasks() throws AnalysisException {
+        ShowMTMVTaskStmt showStmt = (ShowMTMVTaskStmt) stmt;
+        MTMVJobManager jobManager = Env.getCurrentEnv().getMTMVJobManager();
+        List<MTMVTask> tasks = Lists.newArrayList();
+        if (showStmt.isShowAllTasks()) {
+            tasks.addAll(jobManager.getTaskManager().showAllTasks());
+        } else if (showStmt.isShowAllTasksFromDb()) {
+            tasks.addAll(jobManager.getTaskManager().showTasks(showStmt.getDbName()));
+        } else if (showStmt.isShowAllTasksOnMv()) {
+            tasks.addAll(jobManager.getTaskManager().showTasks(showStmt.getDbName(), showStmt.getMVName()));
+        } else if (showStmt.isSpecificTask()) {
+            tasks.add(jobManager.getTaskManager().getTask(showStmt.getTaskId()));
+        }
+        List<List<String>> results = Lists.newArrayList();
+        for (MTMVTask task : tasks) {
+            results.add(task.toStringRow());
+        }
         resultSet = new ShowResultSet(showStmt.getMetaData(), results);
     }
 }

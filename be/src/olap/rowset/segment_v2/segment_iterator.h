@@ -25,7 +25,6 @@
 #include "io/fs/file_reader.h"
 #include "io/fs/file_system.h"
 #include "olap/olap_common.h"
-#include "olap/olap_cond.h"
 #include "olap/rowset/segment_v2/common.h"
 #include "olap/rowset/segment_v2/row_ranges.h"
 #include "olap/rowset/segment_v2/segment.h"
@@ -66,6 +65,37 @@ public:
     bool is_lazy_materialization_read() const override { return _lazy_materialization_read; }
     uint64_t data_id() const override { return _segment->id(); }
 
+    bool update_profile(RuntimeProfile* profile) override {
+        if (_short_cir_eval_predicate.empty() && _pre_eval_block_predicate.empty()) {
+            if (_col_predicates.empty()) {
+                return false;
+            }
+
+            std::string info;
+            for (auto pred : _col_predicates) {
+                info += "\n" + pred->debug_string();
+            }
+            profile->add_info_string("ColumnPredicates", info);
+        } else {
+            if (!_short_cir_eval_predicate.empty()) {
+                std::string info;
+                for (auto pred : _short_cir_eval_predicate) {
+                    info += "\n" + pred->debug_string();
+                }
+                profile->add_info_string("Short Circuit ColumnPredicates", info);
+            }
+            if (!_pre_eval_block_predicate.empty()) {
+                std::string info;
+                for (auto pred : _pre_eval_block_predicate) {
+                    info += "\n" + pred->debug_string();
+                }
+                profile->add_info_string("Pre Evaluate Block ColumnPredicates", info);
+            }
+        }
+
+        return true;
+    }
+
 private:
     Status _init(bool is_vec = false);
 
@@ -92,7 +122,7 @@ private:
     void _init_lazy_materialization();
     void _vec_init_lazy_materialization();
     // TODO: Fix Me
-    // CHAR type in storge layer padding the 0 in length. But query engine need ignore the padding 0.
+    // CHAR type in storage layer padding the 0 in length. But query engine need ignore the padding 0.
     // so segment iterator need to shrink char column before output it. only use in vec query engine.
     void _vec_init_char_column_id();
 
@@ -146,8 +176,8 @@ private:
 
     std::shared_ptr<Segment> _segment;
     const Schema& _schema;
-    // _column_iterators.size() == _schema.num_columns()
-    // map<unique_id, ColumnIterator*> _column_iterators/_bitmap_index_iterators;
+    // _column_iterators_map.size() == _schema.num_columns()
+    // map<unique_id, ColumnIterator*> _column_iterators_map/_bitmap_index_iterators;
     // can use _schema get unique_id by cid
     std::map<int32_t, ColumnIterator*> _column_iterators;
     std::map<int32_t, BitmapIndexIterator*> _bitmap_index_iterators;
@@ -182,7 +212,7 @@ private:
     std::vector<ColumnPredicate*> _short_cir_eval_predicate;
     std::vector<uint32_t> _delete_range_column_ids;
     std::vector<uint32_t> _delete_bloom_filter_column_ids;
-    // when lazy materialization is enable, segmentIter need to read data at least twice
+    // when lazy materialization is enabled, segmentIter need to read data at least twice
     // first, read predicate columns by various index
     // second, read non-predicate columns
     // so we need a field to stand for columns first time to read
@@ -206,7 +236,7 @@ private:
 
     io::FileReaderSPtr _file_reader;
 
-    // char_type columns cid
+    // char_type or array<char> type columns cid
     std::vector<size_t> _char_type_idx;
 
     // number of rows read in the current batch

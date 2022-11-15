@@ -18,10 +18,10 @@
 package org.apache.doris.nereids.trees.expressions;
 
 import org.apache.doris.nereids.exceptions.UnboundException;
+import org.apache.doris.nereids.trees.expressions.shape.UnaryExpression;
 import org.apache.doris.nereids.trees.expressions.visitor.ExpressionVisitor;
 import org.apache.doris.nereids.types.DataType;
 
-import com.google.common.annotations.VisibleForTesting;
 import com.google.common.base.Preconditions;
 import com.google.common.collect.ImmutableList;
 
@@ -47,8 +47,7 @@ public class Alias extends NamedExpression implements UnaryExpression {
         this(NamedExpressionUtil.newExprId(), child, name);
     }
 
-    @VisibleForTesting
-    Alias(ExprId exprId, Expression child, String name) {
+    public Alias(ExprId exprId, Expression child, String name) {
         super(child);
         this.exprId = exprId;
         this.name = name;
@@ -123,7 +122,7 @@ public class Alias extends NamedExpression implements UnaryExpression {
     }
 
     @Override
-    public Expression withChildren(List<Expression> children) {
+    public Alias withChildren(List<Expression> children) {
         Preconditions.checkArgument(children.size() == 1);
         return new Alias(exprId, children.get(0), name);
     }

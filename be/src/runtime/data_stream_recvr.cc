@@ -33,7 +33,6 @@
 #include "runtime/sorted_run_merger.h"
 #include "runtime/thread_context.h"
 #include "util/debug_util.h"
-#include "util/logging.h"
 #include "util/runtime_profile.h"
 
 using std::list;
@@ -187,9 +186,6 @@ Status DataStreamRecvr::SenderQueue::get_batch(RowBatch** next_batch) {
 
     if (!_pending_closures.empty()) {
         auto closure_pair = _pending_closures.front();
-        // TODO(zxy) There may be a problem here, pay attention later
-        // When the batch queue reaches the upper limit of memory, calling run to let
-        // brpc send data packets may cause additional memory to be released
         closure_pair.first->Run();
         _pending_closures.pop_front();
 

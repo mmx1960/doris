@@ -348,11 +348,7 @@ Status BrokerScanNode::scanner_scan(const TBrokerScanRange& scan_range,
                    // stop pushing more batch if
                    // 1. too many batches in queue, or
                    // 2. at least one batch in queue and memory exceed limit.
-                   (_batch_queue.size() >= _max_buffered_batches ||
-                    (thread_context()
-                             ->_thread_mem_tracker_mgr->limiter_mem_tracker()
-                             ->any_limit_exceeded() &&
-                     !_batch_queue.empty()))) {
+                   (_batch_queue.size() >= _max_buffered_batches || !_batch_queue.empty())) {
                 _queue_writer_cond.wait_for(l, std::chrono::seconds(1));
             }
             // Process already set failed, so we just return OK
@@ -380,7 +376,7 @@ Status BrokerScanNode::scanner_scan(const TBrokerScanRange& scan_range,
 
 void BrokerScanNode::scanner_worker(int start_idx, int length) {
     SCOPED_ATTACH_TASK(_runtime_state);
-    SCOPED_CONSUME_MEM_TRACKER(mem_tracker());
+    SCOPED_CONSUME_MEM_TRACKER(mem_tracker_shared());
     // Clone expr context
     std::vector<ExprContext*> scanner_expr_ctxs;
     auto status = Expr::clone_if_not_exists(_conjunct_ctxs, _runtime_state, &scanner_expr_ctxs);

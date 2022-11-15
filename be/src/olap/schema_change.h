@@ -41,13 +41,9 @@ public:
     RowBlockChanger(TabletSchemaSPtr tablet_schema, const DeleteHandler* delete_handler,
                     DescriptorTbl desc_tbl);
 
-    RowBlockChanger(TabletSchemaSPtr tablet_schema, DescriptorTbl desc_tbl);
-
     ~RowBlockChanger();
 
     ColumnMapping* get_mutable_column_mapping(size_t column_index);
-
-    const SchemaMapping& get_schema_mapping() const { return _schema_mapping; }
 
     Status change_row_block(const RowBlock* ref_block, int32_t data_version,
                             RowBlock* mutable_block, const uint64_t* filtered_rows) const;
@@ -91,7 +87,8 @@ public:
     virtual ~SchemaChange() = default;
 
     virtual Status process(RowsetReaderSharedPtr rowset_reader, RowsetWriter* rowset_writer,
-                           TabletSharedPtr new_tablet, TabletSharedPtr base_tablet) {
+                           TabletSharedPtr new_tablet, TabletSharedPtr base_tablet,
+                           TabletSchemaSPtr base_tablet_schema) {
         if (rowset_reader->rowset()->empty() || rowset_reader->rowset()->num_rows() == 0) {
             RETURN_WITH_WARN_IF_ERROR(
                     rowset_writer->flush(),
@@ -105,7 +102,8 @@ public:
         _filtered_rows = 0;
         _merged_rows = 0;
 
-        RETURN_IF_ERROR(_inner_process(rowset_reader, rowset_writer, new_tablet, base_tablet));
+        RETURN_IF_ERROR(
+                _inner_process(rowset_reader, rowset_writer, new_tablet, base_tablet_schema));
         _add_filtered_rows(rowset_reader->filtered_rows());
 
         // Check row num changes
@@ -129,7 +127,7 @@ protected:
     void _add_merged_rows(uint64_t merged_rows) { _merged_rows += merged_rows; }
 
     virtual Status _inner_process(RowsetReaderSharedPtr rowset_reader, RowsetWriter* rowset_writer,
-                                  TabletSharedPtr new_tablet, TabletSharedPtr base_tablet) {
+                                  TabletSharedPtr new_tablet, TabletSchemaSPtr base_tablet_schema) {
         return Status::NotSupported("inner process unsupported.");
     };
 
@@ -137,6 +135,7 @@ protected:
         if (reader->rowset()->num_rows() != writer.num_rows() + _merged_rows + _filtered_rows) {
             LOG(WARNING) << "fail to check row num! "
                          << "source_rows=" << reader->rowset()->num_rows()
+                         << ", writer rows=" << writer.num_rows()
                          << ", merged_rows=" << merged_rows()
                          << ", filtered_rows=" << filtered_rows()
                          << ", new_index_rows=" << writer.num_rows();
@@ -157,7 +156,8 @@ public:
     ~LinkedSchemaChange() override = default;
 
     Status process(RowsetReaderSharedPtr rowset_reader, RowsetWriter* rowset_writer,
-                   TabletSharedPtr new_tablet, TabletSharedPtr base_tablet) override;
+                   TabletSharedPtr new_tablet, TabletSharedPtr base_tablet,
+                   TabletSchemaSPtr base_tablet_schema) override;
 
 private:
     const RowBlockChanger& _row_block_changer;
@@ -174,7 +174,7 @@ public:
 
 private:
     Status _inner_process(RowsetReaderSharedPtr rowset_reader, RowsetWriter* rowset_writer,
-                          TabletSharedPtr new_tablet, TabletSharedPtr base_tablet) override;
+                          TabletSharedPtr new_tablet, TabletSchemaSPtr base_tablet_schema) override;
 
     const RowBlockChanger& _row_block_changer;
     RowBlockAllocator* _row_block_allocator;
@@ -191,7 +191,7 @@ public:
 
 private:
     Status _inner_process(RowsetReaderSharedPtr rowset_reader, RowsetWriter* rowset_writer,
-                          TabletSharedPtr new_tablet, TabletSharedPtr base_tablet) override;
+                          TabletSharedPtr new_tablet, TabletSchemaSPtr base_tablet_schema) override;
 
     const RowBlockChanger& _changer;
 };
@@ -205,7 +205,7 @@ public:
 
 private:
     Status _inner_process(RowsetReaderSharedPtr rowset_reader, RowsetWriter* rowset_writer,
-                          TabletSharedPtr new_tablet, TabletSharedPtr base_tablet) override;
+                          TabletSharedPtr new_tablet, TabletSchemaSPtr base_tablet_schema) override;
 
     bool _internal_sorting(const std::vector<RowBlock*>& row_block_arr,
                            const Version& temp_delta_versions, int64_t oldest_write_timestamp,
@@ -230,7 +230,7 @@ public:
 
 private:
     Status _inner_process(RowsetReaderSharedPtr rowset_reader, RowsetWriter* rowset_writer,
-                          TabletSharedPtr new_tablet, TabletSharedPtr base_tablet) override;
+                          TabletSharedPtr new_tablet, TabletSchemaSPtr base_tablet_schema) override;
 
     Status _internal_sorting(const std::vector<std::unique_ptr<vectorized::Block>>& blocks,
                              const Version& temp_delta_versions, int64_t oldest_write_timestamp,
@@ -278,14 +278,6 @@ public:
     static bool tablet_in_converting(int64_t tablet_id);
 
 private:
-    // Check the status of schema change and clear information between "a pair" of Schema change tables
-    // Since A->B's schema_change information for A will be overwritten in subsequent processing (no extra cleanup here)
-    // Returns:
-    //  Success: If there is historical information, then clear it if there is no problem; or no historical information
-    //  Failure: otherwise, if there is history information and it cannot be emptied (version has not been completed)
-    static Status _check_and_clear_schema_change_info(TabletSharedPtr tablet,
-                                                      const TAlterTabletReq& request);
-
     static Status _get_versions_to_be_changed(TabletSharedPtr base_tablet,
                                               std::vector<Version>* versions_to_be_changed,
                                               RowsetSharedPtr* max_rowset);
@@ -316,11 +308,8 @@ private:
 
     static Status _convert_historical_rowsets(const SchemaChangeParams& sc_params);
 
-    static Status _parse_request(TabletSharedPtr base_tablet, TabletSharedPtr new_tablet,
-                                 RowBlockChanger* rb_changer, bool* sc_sorting, bool* sc_directly,
-                                 const std::unordered_map<std::string, AlterMaterializedViewParam>&
-                                         materialized_function_map,
-                                 DescriptorTbl desc_tbl, TabletSchemaSPtr base_tablet_schema);
+    static Status _parse_request(const SchemaChangeParams& sc_params, RowBlockChanger* rb_changer,
+                                 bool* sc_sorting, bool* sc_directly);
 
     // Initialization Settings for creating a default value
     static Status _init_column_mapping(ColumnMapping* column_mapping,

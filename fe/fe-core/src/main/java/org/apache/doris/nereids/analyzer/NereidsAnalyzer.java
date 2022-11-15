@@ -19,7 +19,10 @@ package org.apache.doris.nereids.analyzer;
 
 import org.apache.doris.nereids.CascadesContext;
 import org.apache.doris.nereids.jobs.batch.AnalyzeRulesJob;
+import org.apache.doris.nereids.jobs.batch.AnalyzeSubqueryRulesJob;
+import org.apache.doris.nereids.jobs.batch.CheckAnalysisJob;
 import org.apache.doris.nereids.jobs.batch.FinalizeAnalyzeJob;
+import org.apache.doris.nereids.jobs.batch.TypeCoercionJob;
 import org.apache.doris.nereids.rules.analysis.Scope;
 
 import java.util.Objects;
@@ -38,20 +41,19 @@ public class NereidsAnalyzer {
     }
 
     public NereidsAnalyzer(CascadesContext cascadesContext, Optional<Scope> outerScope) {
-        this.cascadesContext = Objects.requireNonNull(cascadesContext, "cascadesContext can not be null");
-        this.outerScope = Objects.requireNonNull(outerScope, "outerScope can not be null");
+        this.cascadesContext = Objects.requireNonNull(cascadesContext, "cascadesContext cannot be null");
+        this.outerScope = Objects.requireNonNull(outerScope, "outerScope cannot be null");
     }
 
+    /**
+     * nereids analyze sql.
+     */
     public void analyze() {
         new AnalyzeRulesJob(cascadesContext, outerScope).execute();
+        new AnalyzeSubqueryRulesJob(cascadesContext).execute();
+        new TypeCoercionJob(cascadesContext).execute();
         new FinalizeAnalyzeJob(cascadesContext).execute();
-    }
-
-    public CascadesContext getCascadesContext() {
-        return cascadesContext;
-    }
-
-    public Optional<Scope> getOuterScope() {
-        return outerScope;
+        // check whether analyze result is meaningful
+        new CheckAnalysisJob(cascadesContext).execute();
     }
 }

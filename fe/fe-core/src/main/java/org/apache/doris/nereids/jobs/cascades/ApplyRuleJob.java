@@ -17,11 +17,11 @@
 
 package org.apache.doris.nereids.jobs.cascades;
 
-import org.apache.doris.common.Pair;
 import org.apache.doris.nereids.exceptions.AnalysisException;
 import org.apache.doris.nereids.jobs.Job;
 import org.apache.doris.nereids.jobs.JobContext;
 import org.apache.doris.nereids.jobs.JobType;
+import org.apache.doris.nereids.memo.CopyInResult;
 import org.apache.doris.nereids.memo.GroupExpression;
 import org.apache.doris.nereids.pattern.GroupExpressionMatching;
 import org.apache.doris.nereids.rules.Rule;
@@ -36,7 +36,6 @@ import java.util.List;
 public class ApplyRuleJob extends Job {
     private final GroupExpression groupExpression;
     private final Rule rule;
-    private final boolean exploredOnly;
 
     /**
      * Constructor of ApplyRuleJob.
@@ -49,7 +48,6 @@ public class ApplyRuleJob extends Job {
         super(JobType.APPLY_RULE, context);
         this.groupExpression = groupExpression;
         this.rule = rule;
-        this.exploredOnly = false;
     }
 
     @Override
@@ -61,25 +59,31 @@ public class ApplyRuleJob extends Job {
         GroupExpressionMatching groupExpressionMatching
                 = new GroupExpressionMatching(rule.getPattern(), groupExpression);
         for (Plan plan : groupExpressionMatching) {
-            List<Plan> newPlans = rule.transform(plan, context.getPlannerContext());
+            String traceBefore = enableTrace ? getMemoTraceLog() : null;
+            context.onInvokeRule(rule.getRuleType());
+
+            boolean changed = false;
+            List<Plan> newPlans = rule.transform(plan, context.getCascadesContext());
             for (Plan newPlan : newPlans) {
-                Pair<Boolean, GroupExpression> pair = context.getPlannerContext().getMemo()
-                        .copyIn(newPlan, groupExpression.getOwnerGroup(), rule.isRewrite());
-                if (!pair.first) {
+                CopyInResult result = context.getCascadesContext()
+                        .getMemo()
+                        .copyIn(newPlan, groupExpression.getOwnerGroup(), false);
+                if (!result.generateNewExpression) {
                     continue;
                 }
-                GroupExpression newGroupExpression = pair.second;
 
+                changed = true;
+                GroupExpression newGroupExpression = result.correspondingExpression;
                 if (newPlan instanceof LogicalPlan) {
-                    pushTask(new DeriveStatsJob(newGroupExpression, context));
-                    if (exploredOnly) {
-                        pushTask(new ExploreGroupExpressionJob(newGroupExpression, context));
-                        continue;
-                    }
-                    pushTask(new OptimizeGroupExpressionJob(newGroupExpression, context));
+                    pushJob(new OptimizeGroupExpressionJob(newGroupExpression, context));
+                    pushJob(new DeriveStatsJob(newGroupExpression, context));
                 } else {
-                    pushTask(new CostAndEnforcerJob(newGroupExpression, context));
+                    pushJob(new CostAndEnforcerJob(newGroupExpression, context));
                 }
+            }
+            if (changed && enableTrace) {
+                String traceAfter = getMemoTraceLog();
+                printTraceLog(rule, traceBefore, traceAfter);
             }
         }
         groupExpression.setApplied(rule);

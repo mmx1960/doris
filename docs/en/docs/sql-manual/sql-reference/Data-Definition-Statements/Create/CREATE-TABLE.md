@@ -40,7 +40,7 @@ CREATE TABLE [IF NOT EXISTS] [database.]table
 [keys_type]
 [table_comment]
 [partition_info]
-distribution_info
+distribution_desc
 [rollup_list]
 [properties]
 [extra_properties]
@@ -230,7 +230,16 @@ distribution_info
 
     Define the data bucketing method.
 
-    `DISTRIBUTED BY HASH (k1[,k2 ...]) [BUCKETS num]`
+    1) Hash
+       Syntax:
+       `DISTRIBUTED BY HASH (k1[,k2 ...]) [BUCKETS num]`
+       Explain:
+       Hash bucketing using the specified key column.
+    2) Random
+       Syntax:
+       `DISTRIBUTED BY RANDOM [BUCKETS num]`
+       Explain:
+       Use random numbers for bucketing.
 
 * `rollup_list`
 
@@ -314,9 +323,19 @@ distribution_info
 
     * `light_schema_change`
 
-        Doris would not use light schema change optimization by default. It is supported to turn on the optimization by set the property as true.
+        Whether to use the Light Schema Change optimization.
+        
+        If set to true, the addition and deletion of value columns can be done more quickly and synchronously.
     
         `"light_schema_change"="true"`
+    
+    * `disable_auto_compaction`
+
+        Whether to disable automatic compaction for this table.
+
+        If this property is set to 'true', the background automatic compaction process will skip all the tables of this table.
+
+        `"disable_auto_compaction" = "false"`
     
     * Dynamic partition related
     
@@ -558,9 +577,40 @@ distribution_info
         "dynamic_partition.end" = "3",
         "dynamic_partition.prefix" = "p",
         "dynamic_partition.buckets" = "32",
-        "dynamic_partition."replication_allocation" = "tag.location.group_a:3"
+        "dynamic_partition.replication_allocation" = "tag.location.group_a:3"
      );
     ```
+
+11. Set the table hot and cold separation policy through the `storage_policy` property.
+```
+        CREATE TABLE IF NOT EXISTS create_table_use_created_policy 
+        (
+            k1 BIGINT,
+            k2 LARGEINT,
+            v1 VARCHAR(2048)
+        )
+        UNIQUE KEY(k1)
+        DISTRIBUTED BY HASH (k1) BUCKETS 3
+        PROPERTIES(
+            "storage_policy" = "test_create_table_use_policy",
+            "replication_num" = "1"
+        );
+```
+NOTE: Need to create the s3 resource and storage policy before the table can be successfully associated with the migration policy 
+
+12. Add a hot and cold data migration strategy for the table partition
+```
+        CREATE TABLE create_table_partion_use_created_policy
+        (
+            k1 DATE,
+            k2 INT,
+            V1 VARCHAR(2048) REPLACE
+        ) PARTITION BY RANGE (k1) (
+            PARTITION p1 VALUES LESS THAN ("2022-01-01") ("storage_policy" = "test_create_table_partition_use_policy_1" ,"replication_num"="1"),
+            PARTITION p2 VALUES LESS THAN ("2022-02-01") ("storage_policy" = "test_create_table_partition_use_policy_2" ,"replication_num"="1")
+        ) DISTRIBUTED BY HASH(k2) BUCKETS 1;
+```
+NOTE: Need to create the s3 resource and storage policy before the table can be successfully associated with the migration policy 
 
 ### Keywords
 

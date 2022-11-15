@@ -106,14 +106,19 @@ The following parameters are accepted by ODBC external table:
 Parameter | Description
 ---|---
 **hosts** | IP address of external database
+**port** | Port of external database
 **driver** | The driver name of ODBC Driver, which needs to be/conf/odbcinst.ini. The driver names should be consistent.
 **type** | The type of external database, currently supports Oracle, MySQL and PostgerSQL
 **user** | The user name of database
 **password** | password for the user
-**charset** | charset of connection
+**charset** | charset of connection(it is useless for sqlserver)
 
 Remark：
-In addition to adding the above parameters to `PROPERTIES`, you can also add parameters specific to each database's ODBC driver implementation, such as `sslverify` for mysql, etc.
+In addition to adding the above parameters to `PROPERTIES`, you can also add parameters specific to each database's ODBC driver implementation, such as `sslverify` for mysql、`ClientCharset` for sqlserver, etc.
+
+>Notes:
+>
+>If you are on SQL Server 2017 and later, because SQL Server 2017 and later have security authentication enabled by default, you need to add `"TrustServerCertificate"="Yes"` when you define ODBC Resources again
 
 ##### Installation and configuration of ODBC driver
 
@@ -199,7 +204,7 @@ This contains all versions of PostgreSQL from 9.x to 14.x, including the corresp
 
 #### 
 
-| Oracle版本                                                   | Oracle ODBC版本                            |
+| Oracle version                                                  | Oracle ODBC version                            |
 | ------------------------------------------------------------ | ------------------------------------------ |
 | Oracle Database 11g Enterprise Edition Release 11.2.0.1.0 - 64bit Production | oracle-instantclient19.13-odbc-19.13.0.0.0 |
 | Oracle Database 12c Standard Edition Release 12.2.0.1.0 - 64bit Production | oracle-instantclient19.13-odbc-19.13.0.0.0 |
@@ -215,6 +220,14 @@ https://download.oracle.com/otn_software/linux/instantclient/1913000/oracle-inst
 https://download.oracle.com/otn_software/linux/instantclient/1913000/oracle-instantclient19.13-odbc-19.13.0.0.0-2.x86_64.rpm
 https://download.oracle.com/otn_software/linux/instantclient/1913000/oracle-instantclient19.13-basic-19.13.0.0.0-2.x86_64.rpm
 ```
+
+#### 4.SQLServer
+
+| SQLServer version | SQLServer ODBC version |
+| --------- | -------------- |
+| SQL Server 2016 Enterprise | freetds-1.2.21 |
+
+Currently only tested this version, other versions will be added after testing
 
 ## Ubuntu operating system
 
@@ -254,6 +267,14 @@ sudo alien -i oracle-instantclient19.13-devel-19.13.0.0.0-2.x86_64.rpm
 sudo alien -i oracle-instantclient19.13-odbc-19.13.0.0.0-2.x86_64.rpm
 sudo alien -i oracle-instantclient19.13-sqlplus-19.13.0.0.0-2.x86_64.rpm
 ````
+
+#### 4.SQLServer
+
+| SQLServer version | SQLServer ODBC version |
+| --------- | -------------- |
+| SQL Server 2016 Enterprise | freetds-1.2.21 |
+
+Currently only tested this version, other versions will be added after testing
 
 ## Data type mapping
 
@@ -381,5 +402,10 @@ This is the compatibility problem between MySQL database ODBC driver and existin
 
     Connection to the database fails. The` Err: part` represents the error of different database connection failures. This is usually a configuration problem. You should check whether the IP address, port or account password are mismatched.
 
-    
+ 11. Messy code appears when reading and writing emoji emoji in mysql odbc table
 
+    The default encoding used by Doris when connecting to odbc tables is utf8, since the default utf8 encoding in mysql is utf8mb3, it can't represent the emoji expressions which need 4-byte encoding. Here need to set `charset`=`utf8mb4` when you create odbc mysql tables, then can read and write emoji normally 😀.
+
+12. Set charset for sqlserver odbc table
+
+    It is useless to set `charset` parameter for sqlserver odbc table，you can set `ClientCharset` parameter (for freetds) to get write or read data, for example: "ClientCharset" = "UTF-8".

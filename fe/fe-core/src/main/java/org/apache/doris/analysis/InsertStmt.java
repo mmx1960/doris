@@ -23,6 +23,7 @@ import org.apache.doris.catalog.Column;
 import org.apache.doris.catalog.Database;
 import org.apache.doris.catalog.DatabaseIf;
 import org.apache.doris.catalog.Env;
+import org.apache.doris.catalog.JdbcTable;
 import org.apache.doris.catalog.MysqlTable;
 import org.apache.doris.catalog.OdbcTable;
 import org.apache.doris.catalog.OlapTable;
@@ -188,7 +189,7 @@ public class InsertStmt extends DdlStmt {
     public void getTables(Analyzer analyzer, Map<Long, TableIf> tableMap, Set<String> parentViewNameSet)
             throws AnalysisException {
         // get dbs of statement
-        queryStmt.getTables(analyzer, tableMap, parentViewNameSet);
+        queryStmt.getTables(analyzer, false, tableMap, parentViewNameSet);
         tblName.analyze(analyzer);
         // disallow external catalog
         Util.prohibitExternalCatalog(tblName.getCtl(), this.getClass().getSimpleName());
@@ -355,7 +356,8 @@ public class InsertStmt extends DdlStmt {
             }
             // will use it during create load job
             indexIdToSchemaHash = olapTable.getIndexIdToSchemaHash();
-        }  else if (targetTable instanceof MysqlTable || targetTable instanceof OdbcTable) {
+        } else if (targetTable instanceof MysqlTable || targetTable instanceof OdbcTable
+                || targetTable instanceof JdbcTable) {
             if (targetPartitionNames != null) {
                 ErrorReport.reportAnalysisException(ErrorCode.ERR_PARTITION_CLAUSE_NO_ALLOWED);
             }
@@ -447,7 +449,7 @@ public class InsertStmt extends DdlStmt {
                 for (int i = 0; i < targetColumns.size(); i++) {
                     if (targetColumns.get(i).nameEquals(origName, false)) {
                         // Rule A
-                        origColIdxsForExtendCols.add(new Pair<>(i, null));
+                        origColIdxsForExtendCols.add(Pair.of(i, null));
                         targetColumns.add(column);
                         break;
                     }
@@ -462,7 +464,7 @@ public class InsertStmt extends DdlStmt {
                 String origName = refColumn.getColumnName();
                 for (int originColumnIdx = 0; originColumnIdx < targetColumns.size(); originColumnIdx++) {
                     if (targetColumns.get(originColumnIdx).nameEquals(origName, false)) {
-                        origColIdxsForExtendCols.add(new Pair<>(originColumnIdx, column));
+                        origColIdxsForExtendCols.add(Pair.of(originColumnIdx, column));
                         targetColumns.add(column);
                         break;
                     }

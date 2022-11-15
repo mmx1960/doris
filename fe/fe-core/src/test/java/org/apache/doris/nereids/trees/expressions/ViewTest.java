@@ -24,7 +24,7 @@ import org.apache.doris.nereids.glue.translator.PlanTranslatorContext;
 import org.apache.doris.nereids.parser.NereidsParser;
 import org.apache.doris.nereids.properties.PhysicalProperties;
 import org.apache.doris.nereids.rules.analysis.EliminateAliasNode;
-import org.apache.doris.nereids.rules.rewrite.logical.MergeConsecutiveProjects;
+import org.apache.doris.nereids.rules.rewrite.logical.MergeProjects;
 import org.apache.doris.nereids.trees.plans.physical.PhysicalPlan;
 import org.apache.doris.nereids.util.MemoTestUtils;
 import org.apache.doris.nereids.util.PatternMatchSupported;
@@ -99,12 +99,13 @@ public class ViewTest extends TestWithFeService implements PatternMatchSupported
             NamedExpressionUtil.clear();
             System.out.println("\n\n***** " + sql + " *****\n\n");
             StatementContext statementContext = MemoTestUtils.createStatementContext(connectContext, sql);
-            PhysicalPlan plan = new NereidsPlanner(statementContext).plan(
+            NereidsPlanner planner = new NereidsPlanner(statementContext);
+            PhysicalPlan plan = planner.plan(
                     new NereidsParser().parseSingle(sql),
                     PhysicalProperties.ANY
             );
             // Just to check whether translate will throw exception
-            new PhysicalPlanTranslator().translatePlan(plan, new PlanTranslatorContext());
+            new PhysicalPlanTranslator().translatePlan(plan, new PlanTranslatorContext(planner.getCascadesContext()));
         }
     }
 
@@ -113,8 +114,8 @@ public class ViewTest extends TestWithFeService implements PatternMatchSupported
         PlanChecker.from(connectContext)
                 .analyze("SELECT * FROM V1")
                 .applyTopDown(new EliminateAliasNode())
-                .applyTopDown(new MergeConsecutiveProjects())
-                .matches(
+                .applyTopDown(new MergeProjects())
+                .matchesFromRoot(
                       logicalProject(
                               logicalOlapScan()
                       )
@@ -124,10 +125,24 @@ public class ViewTest extends TestWithFeService implements PatternMatchSupported
     @Test
     public void testNestedView() {
         PlanChecker.from(connectContext)
-                .analyze("SELECT * FROM (SELECT * FROM V1 JOIN V2 ON V1.ID1 = V2.ID2) X JOIN (SELECT * FROM V1 JOIN V3 ON V1.ID1 = V3.ID2) Y ON X.ID1 = Y.ID3")
+                .analyze("SELECT *\n"
+                        + "FROM (\n"
+                        + "  SELECT *\n"
+                        + "  FROM V1\n"
+                        + "  JOIN V2\n"
+                        + "  ON V1.ID1 = V2.ID2\n"
+                        + ") X\n"
+                        + "JOIN (\n"
+                        + "  SELECT *\n"
+                        + "  FROM V1\n"
+                        + "  JOIN V3\n"
+                        + "  ON V1.ID1 = V3.ID2\n"
+                        + ") Y\n"
+                        + "ON X.ID1 = Y.ID3"
+                )
                 .applyTopDown(new EliminateAliasNode())
-                .applyTopDown(new MergeConsecutiveProjects())
-                .matches(
+                .applyTopDown(new MergeProjects())
+                .matchesFromRoot(
                         logicalProject(
                                 logicalJoin(
                                         logicalProject(

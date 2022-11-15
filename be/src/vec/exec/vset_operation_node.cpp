@@ -90,7 +90,6 @@ Status VSetOperationNode::close(RuntimeState* state) {
 
 Status VSetOperationNode::init(const TPlanNode& tnode, RuntimeState* state) {
     RETURN_IF_ERROR(ExecNode::init(tnode, state));
-    DCHECK_EQ(_conjunct_ctxs.size(), 0);
     std::vector<std::vector<::doris::TExpr>> result_texpr_lists;
 
     // Create result_expr_ctx_lists_ from thrift exprs.
@@ -151,16 +150,16 @@ void VSetOperationNode::hash_table_init() {
         switch (_child_expr_lists[0][0]->root()->result_type()) {
         case TYPE_BOOLEAN:
         case TYPE_TINYINT:
-            _hash_table_variants.emplace<I8HashTableContext>();
+            _hash_table_variants.emplace<I8HashTableContext<RowRefListWithFlags>>();
             break;
         case TYPE_SMALLINT:
-            _hash_table_variants.emplace<I16HashTableContext>();
+            _hash_table_variants.emplace<I16HashTableContext<RowRefListWithFlags>>();
             break;
         case TYPE_INT:
         case TYPE_FLOAT:
         case TYPE_DATEV2:
         case TYPE_DECIMAL32:
-            _hash_table_variants.emplace<I32HashTableContext>();
+            _hash_table_variants.emplace<I32HashTableContext<RowRefListWithFlags>>();
             break;
         case TYPE_BIGINT:
         case TYPE_DOUBLE:
@@ -168,15 +167,15 @@ void VSetOperationNode::hash_table_init() {
         case TYPE_DATE:
         case TYPE_DECIMAL64:
         case TYPE_DATETIMEV2:
-            _hash_table_variants.emplace<I64HashTableContext>();
+            _hash_table_variants.emplace<I64HashTableContext<RowRefListWithFlags>>();
             break;
         case TYPE_LARGEINT:
         case TYPE_DECIMALV2:
         case TYPE_DECIMAL128:
-            _hash_table_variants.emplace<I128HashTableContext>();
+            _hash_table_variants.emplace<I128HashTableContext<RowRefListWithFlags>>();
             break;
         default:
-            _hash_table_variants.emplace<SerializedHashTableContext>();
+            _hash_table_variants.emplace<SerializedHashTableContext<RowRefListWithFlags>>();
         }
         return;
     }
@@ -209,24 +208,30 @@ void VSetOperationNode::hash_table_init() {
     if (use_fixed_key) {
         if (has_null) {
             if (std::tuple_size<KeysNullMap<UInt64>>::value + key_byte_size <= sizeof(UInt64)) {
-                _hash_table_variants.emplace<I64FixedKeyHashTableContext<true>>();
+                _hash_table_variants
+                        .emplace<I64FixedKeyHashTableContext<true, RowRefListWithFlags>>();
             } else if (std::tuple_size<KeysNullMap<UInt128>>::value + key_byte_size <=
                        sizeof(UInt128)) {
-                _hash_table_variants.emplace<I128FixedKeyHashTableContext<true>>();
+                _hash_table_variants
+                        .emplace<I128FixedKeyHashTableContext<true, RowRefListWithFlags>>();
             } else {
-                _hash_table_variants.emplace<I256FixedKeyHashTableContext<true>>();
+                _hash_table_variants
+                        .emplace<I256FixedKeyHashTableContext<true, RowRefListWithFlags>>();
             }
         } else {
             if (key_byte_size <= sizeof(UInt64)) {
-                _hash_table_variants.emplace<I64FixedKeyHashTableContext<false>>();
+                _hash_table_variants
+                        .emplace<I64FixedKeyHashTableContext<false, RowRefListWithFlags>>();
             } else if (key_byte_size <= sizeof(UInt128)) {
-                _hash_table_variants.emplace<I128FixedKeyHashTableContext<false>>();
+                _hash_table_variants
+                        .emplace<I128FixedKeyHashTableContext<false, RowRefListWithFlags>>();
             } else {
-                _hash_table_variants.emplace<I256FixedKeyHashTableContext<false>>();
+                _hash_table_variants
+                        .emplace<I256FixedKeyHashTableContext<false, RowRefListWithFlags>>();
             }
         }
     } else {
-        _hash_table_variants.emplace<SerializedHashTableContext>();
+        _hash_table_variants.emplace<SerializedHashTableContext<RowRefListWithFlags>>();
     }
 }
 
@@ -243,7 +248,7 @@ Status VSetOperationNode::hash_table_build(RuntimeState* state) {
         block.clear_column_data();
         SCOPED_TIMER(_build_timer);
         RETURN_IF_CANCELLED(state);
-        RETURN_IF_ERROR_AND_CHECK_SPAN(child(0)->get_next(state, &block, &eos),
+        RETURN_IF_ERROR_AND_CHECK_SPAN(child(0)->get_next_after_projects(state, &block, &eos),
                                        child(0)->get_next_span(), eos);
 
         size_t allocated_bytes = block.allocated_bytes();
@@ -310,8 +315,9 @@ Status VSetOperationNode::process_probe_block(RuntimeState* state, int child_id,
     _probe_rows = 0;
 
     RETURN_IF_CANCELLED(state);
-    RETURN_IF_ERROR_AND_CHECK_SPAN(child(child_id)->get_next(state, &_probe_block, eos),
-                                   child(child_id)->get_next_span(), *eos);
+    RETURN_IF_ERROR_AND_CHECK_SPAN(
+            child(child_id)->get_next_after_projects(state, &_probe_block, eos),
+            child(child_id)->get_next_span(), *eos);
     _probe_rows = _probe_block.rows();
     RETURN_IF_ERROR(extract_probe_column(_probe_block, _probe_columns, child_id));
     return Status::OK();

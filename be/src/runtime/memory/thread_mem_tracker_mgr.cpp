@@ -19,26 +19,26 @@
 
 #include "runtime/exec_env.h"
 #include "runtime/fragment_mgr.h"
-#include "runtime/memory/mem_tracker_task_pool.h"
 #include "service/backend_options.h"
 
 namespace doris {
 
 void ThreadMemTrackerMgr::attach_limiter_tracker(
-        const std::string& task_id, const TUniqueId& fragment_instance_id,
-        const std::shared_ptr<MemTrackerLimiter>& mem_tracker) {
+        const std::shared_ptr<MemTrackerLimiter>& mem_tracker,
+        const TUniqueId& fragment_instance_id) {
     DCHECK(mem_tracker);
     flush_untracked_mem<false>();
-    _task_id = task_id;
     _fragment_instance_id = fragment_instance_id;
     _limiter_tracker = mem_tracker;
+    _limiter_tracker_raw = mem_tracker.get();
 }
 
-void ThreadMemTrackerMgr::detach_limiter_tracker() {
+void ThreadMemTrackerMgr::detach_limiter_tracker(
+        const std::shared_ptr<MemTrackerLimiter>& old_mem_tracker) {
     flush_untracked_mem<false>();
-    _task_id = "";
     _fragment_instance_id = TUniqueId();
-    _limiter_tracker = ExecEnv::GetInstance()->process_mem_tracker();
+    _limiter_tracker = old_mem_tracker;
+    _limiter_tracker_raw = old_mem_tracker.get();
 }
 
 void ThreadMemTrackerMgr::exceeded_cancel_task(const std::string& cancel_details) {
@@ -49,22 +49,14 @@ void ThreadMemTrackerMgr::exceeded_cancel_task(const std::string& cancel_details
     }
 }
 
-void ThreadMemTrackerMgr::exceeded(int64_t failed_consume_size) {
+void ThreadMemTrackerMgr::exceeded() {
     if (_cb_func != nullptr) {
         _cb_func();
     }
     if (is_attach_query()) {
-        std::string cancel_msg;
-        if (!_consumer_tracker_stack.empty()) {
-            cancel_msg = fmt::format(
-                    "exec node:<name={}>, can change the limit by `set exec_mem_limit=xxx`",
-                    _consumer_tracker_stack[-1]->label());
-        } else {
-            cancel_msg = "exec node:unknown, can change the limit by `set exec_mem_limit=xxx`";
-        }
-        auto st = _limiter_tracker->mem_limit_exceeded(cancel_msg, failed_consume_size);
-        exceeded_cancel_task(st.to_string());
-        _check_limit = false; // Make sure it will only be canceled once
+        exceeded_cancel_task(_exceed_mem_limit_msg);
     }
+    _check_limit = false; // Make sure it will only be canceled once
 }
+
 } // namespace doris

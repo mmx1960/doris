@@ -75,6 +75,8 @@ public class TableProperty implements Writable {
 
     private boolean enableLightSchemaChange = false;
 
+    private boolean disableAutoCompaction = false;
+
     private DataSortInfo dataSortInfo = new DataSortInfo();
 
     // remote storage policy, for cold data
@@ -116,12 +118,16 @@ public class TableProperty implements Writable {
      *
      * @return this for chained
      */
-    public TableProperty resetPropertiesForRestore() {
+    public TableProperty resetPropertiesForRestore(boolean reserveDynamicPartitionEnable,
+            ReplicaAllocation replicaAlloc) {
         // disable dynamic partition
         if (properties.containsKey(DynamicPartitionProperty.ENABLE)) {
-            properties.put(DynamicPartitionProperty.ENABLE, "false");
+            if (!reserveDynamicPartitionEnable) {
+                properties.put(DynamicPartitionProperty.ENABLE, "false");
+            }
             executeBuildDynamicProperty();
         }
+        setReplicaAlloc(replicaAlloc);
         return this;
     }
 
@@ -150,6 +156,16 @@ public class TableProperty implements Writable {
         enableLightSchemaChange = Boolean.parseBoolean(
                 properties.getOrDefault(PropertyAnalyzer.PROPERTIES_ENABLE_LIGHT_SCHEMA_CHANGE, "false"));
         return this;
+    }
+
+    public TableProperty buildDisableAutoCompaction() {
+        disableAutoCompaction = Boolean.parseBoolean(
+                properties.getOrDefault(PropertyAnalyzer.PROPERTIES_DISABLE_AUTO_COMPACTION, "false"));
+        return this;
+    }
+
+    public boolean disableAutoCompaction() {
+        return disableAutoCompaction;
     }
 
     public TableProperty buildStoragePolicy() {

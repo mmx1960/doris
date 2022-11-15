@@ -20,7 +20,10 @@
 // **Note**: default db will be create if not exist
 defaultDb = "regression_test"
 
-jdbcUrl = "jdbc:mysql://127.0.0.1:9030/?"
+// add useLocalSessionState so that the jdbc will not send
+// init cmd like: select @@session.tx_read_only
+// at each time we connect.
+jdbcUrl = "jdbc:mysql://127.0.0.1:9030/?useLocalSessionState=true"
 jdbcUser = "root"
 jdbcPassword = ""
 
@@ -48,7 +51,7 @@ testDirectories = ""
 // this groups will not be executed
 excludeGroups = ""
 // this suites will not be executed
-excludeSuites = "test_create_table_with_bloom_filter"
+excludeSuites = ""
 // this directories will not be executed
 excludeDirectories = ""
 
@@ -60,3 +63,29 @@ hdfsFs = "hdfs://127.0.0.1:9000"
 hdfsUser = "doris-test"
 hdfsPasswd = ""
 brokerName = "broker_name"
+
+// broker load test config
+enableBrokerLoad=true
+ak=""
+sk=""
+
+// jdbc connector test config
+// To enable jdbc test, you need first start mysql/pg container.
+// See `docker/thirdparties/start-thirdparties-docker.sh`
+enableJdbcTest=false
+mysql_57_port=3316
+pg_14_port=5442
+
+// hive catalog test config
+// To enable jdbc test, you need first start hive container.
+// See `docker/thirdparties/start-thirdparties-docker.sh`
+enableHiveTest=false
+hms_port=9183
+hdfs_port=8120
+
+// elasticsearch catalog test config
+// See `docker/thirdparties/start-thirdparties-docker.sh`
+enableEsTest=false
+es_6_port=19200
+es_7_port=29200
+es_8_port=39200

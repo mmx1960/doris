@@ -73,7 +73,7 @@ public:
     /// Initializes this object from the thrift tnode desc. The subclass should
     /// do any initialization that can fail in Init() rather than the ctor.
     /// If overridden in subclass, must first call superclass's Init().
-    virtual Status init(const TPlanNode& tnode, RuntimeState* state = nullptr);
+    virtual Status init(const TPlanNode& tnode, RuntimeState* state);
 
     // Sets up internal structures, etc., without doing any actual work.
     // Must be called prior to open(). Will only be called once in this
@@ -104,6 +104,9 @@ public:
     // TODO: AggregationNode and HashJoinNode cannot be "re-opened" yet.
     virtual Status get_next(RuntimeState* state, RowBatch* row_batch, bool* eos);
     virtual Status get_next(RuntimeState* state, vectorized::Block* block, bool* eos);
+
+    // new interface to compatible new optimizers in FE
+    Status get_next_after_projects(RuntimeState* state, vectorized::Block* block, bool* eos);
 
     // Resets the stream of row batches to be retrieved by subsequent GetNext() calls.
     // Clears all internal state, returning this node to the state it was in after calling
@@ -179,7 +182,10 @@ public:
 
     int id() const { return _id; }
     TPlanNodeType::type type() const { return _type; }
-    virtual const RowDescriptor& row_desc() const { return _row_descriptor; }
+    virtual const RowDescriptor& row_desc() const {
+        return _output_row_descriptor ? *_output_row_descriptor : _row_descriptor;
+    }
+    virtual const RowDescriptor& intermediate_row_desc() const { return _row_descriptor; }
     int64_t rows_returned() const { return _num_rows_returned; }
     int64_t limit() const { return _limit; }
     bool reached_limit() const { return _limit != -1 && _num_rows_returned >= _limit; }
@@ -189,8 +195,11 @@ public:
     RuntimeProfile::Counter* memory_used_counter() const { return _memory_used_counter; }
 
     MemTracker* mem_tracker() const { return _mem_tracker.get(); }
+    std::shared_ptr<MemTracker> mem_tracker_shared() const { return _mem_tracker; }
 
     OpentelemetrySpan get_next_span() { return _get_next_span; }
+
+    virtual std::string get_name();
 
     // Extract node id from p->name().
     static int get_node_id_from_profile(RuntimeProfile* p);
@@ -210,11 +219,6 @@ protected:
     /// as the initial reservation is not released before Close().
     Status claim_buffer_reservation(RuntimeState* state);
 
-    /// Release any unused reservation in excess of the node's initial reservation. Returns
-    /// an error if releasing the reservation requires flushing pages to disk, and that
-    /// fails.
-    Status release_unused_reservation();
-
     /// Release all memory of block which got from child. The block
     // 1. clear mem of valid column get from child, make sure child can reuse the mem
     // 2. delete and release the column which create by function all and other reason
@@ -223,6 +227,9 @@ protected:
     /// Only use in vectorized exec engine to check whether reach limit and cut num row for block
     // and add block rows for profile
     void reached_limit(vectorized::Block* block, bool* eos);
+
+    /// Only use in vectorized exec engine try to do projections to trans _row_desc -> _output_row_desc
+    Status do_projections(vectorized::Block* origin_block, vectorized::Block* output_block);
 
     /// Extends blocking queue for row batches. Row batches have a property that
     /// they must be processed in the order they were produced, even in cancellation
@@ -279,6 +286,10 @@ protected:
 
     std::vector<ExecNode*> _children;
     RowDescriptor _row_descriptor;
+    vectorized::Block _origin_block;
+
+    std::unique_ptr<RowDescriptor> _output_row_descriptor;
+    std::vector<doris::vectorized::VExprContext*> _projections;
 
     /// Resource information sent from the frontend.
     const TBackendResourceProfile _resource_profile;
@@ -289,7 +300,7 @@ protected:
     std::unique_ptr<RuntimeProfile> _runtime_profile;
 
     /// Account for peak memory used by this node
-    std::unique_ptr<MemTracker> _mem_tracker;
+    std::shared_ptr<MemTracker> _mem_tracker;
 
     RuntimeProfile::Counter* _rows_returned_counter;
     RuntimeProfile::Counter* _rows_returned_rate;
@@ -315,6 +326,9 @@ protected:
     /// least the minimum reservation so that it can be returned to the initial
     /// reservations pool in Close().
     BufferPool::ClientHandle _buffer_pool_client;
+
+    // Set to true if this is a vectorized exec node.
+    bool _is_vec = false;
 
     ExecNode* child(int i) { return _children[i]; }
 

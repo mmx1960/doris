@@ -125,6 +125,8 @@ void VDataStreamRecvr::SenderQueue::add_block(const PBlock& pblock, int be_numbe
     {
         SCOPED_TIMER(_recvr->_deserialize_row_batch_timer);
         block = new Block(pblock);
+        COUNTER_UPDATE(_recvr->_decompress_timer, block->get_decompress_time());
+        COUNTER_UPDATE(_recvr->_decompress_bytes, block->get_decompressed_bytes());
     }
 
     VLOG_ROW << "added #rows=" << block->rows() << " batch_size=" << block_byte_size << "\n";
@@ -150,7 +152,6 @@ void VDataStreamRecvr::SenderQueue::add_block(Block* block, bool use_move) {
         return;
     }
     Block* nblock = new Block(block->get_columns_with_type_and_name());
-    nblock->info = block->info;
 
     // local exchange should copy the block contented if use move == false
     if (use_move) {
@@ -169,6 +170,8 @@ void VDataStreamRecvr::SenderQueue::add_block(Block* block, bool use_move) {
     _data_arrival_cv.notify_one();
 
     if (_recvr->exceeds_limit(block_size)) {
+        // yiguolei
+        // It is too tricky here, if the running thread is bthread then the tid may be wrong.
         std::thread::id tid = std::this_thread::get_id();
         MonotonicStopWatch monotonicStopWatch;
         monotonicStopWatch.start();
@@ -248,11 +251,14 @@ void VDataStreamRecvr::SenderQueue::close() {
 }
 
 VDataStreamRecvr::VDataStreamRecvr(
-        VDataStreamMgr* stream_mgr, const RowDescriptor& row_desc,
+        VDataStreamMgr* stream_mgr, RuntimeState* state, const RowDescriptor& row_desc,
         const TUniqueId& fragment_instance_id, PlanNodeId dest_node_id, int num_senders,
         bool is_merging, int total_buffer_limit, RuntimeProfile* profile,
         std::shared_ptr<QueryStatisticsRecvr> sub_plan_query_statistics_recvr)
         : _mgr(stream_mgr),
+#ifdef USE_MEM_TRACKER
+          _state(state),
+#endif
           _fragment_instance_id(fragment_instance_id),
           _dest_node_id(dest_node_id),
           _total_buffer_limit(total_buffer_limit),
@@ -284,6 +290,8 @@ VDataStreamRecvr::VDataStreamRecvr(
     _data_arrival_timer = ADD_TIMER(_profile, "DataArrivalWaitTime");
     _buffer_full_total_timer = ADD_TIMER(_profile, "SendersBlockedTotalTimer(*)");
     _first_batch_wait_total_timer = ADD_TIMER(_profile, "FirstBatchArrivalWaitTime");
+    _decompress_timer = ADD_TIMER(_profile, "DecompressTime");
+    _decompress_bytes = ADD_COUNTER(_profile, "DecompressBytes", TUnit::BYTES);
 }
 
 VDataStreamRecvr::~VDataStreamRecvr() {
@@ -311,6 +319,8 @@ Status VDataStreamRecvr::create_merger(const std::vector<VExprContext*>& orderin
 
 void VDataStreamRecvr::add_block(const PBlock& pblock, int sender_id, int be_number,
                                  int64_t packet_seq, ::google::protobuf::Closure** done) {
+    SCOPED_ATTACH_TASK(_state->query_mem_tracker(), print_id(_state->query_id()),
+                       _fragment_instance_id);
     SCOPED_CONSUME_MEM_TRACKER(_mem_tracker.get());
     int use_sender_id = _is_merging ? sender_id : 0;
     _sender_queues[use_sender_id]->add_block(pblock, be_number, packet_seq, done);

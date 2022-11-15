@@ -147,9 +147,9 @@ public:
 };
 
 // iterator offset，用于二分查找
-typedef uint32_t iterator_offset_t;
+using iterator_offset_t = size_t;
 
-class BinarySearchIterator : public std::iterator<std::random_access_iterator_tag, size_t> {
+class BinarySearchIterator : public std::iterator_traits<iterator_offset_t*> {
 public:
     BinarySearchIterator() : _offset(0u) {}
     explicit BinarySearchIterator(iterator_offset_t offset) : _offset(offset) {}
@@ -268,7 +268,7 @@ bool valid_decimal(const std::string& value_str, const uint32_t precision, const
 
 // Validate for date/datetime roughly. The format is 'yyyy-MM-dd HH:mm:ss'
 // TODO: support 'yyyy-MM-dd HH:mm:ss.SSS'
-bool valid_datetime(const std::string& value_str);
+bool valid_datetime(const std::string& value_str, const uint32_t scale);
 
 bool valid_bool(const std::string& value_str);
 

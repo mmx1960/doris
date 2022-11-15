@@ -19,13 +19,11 @@
 
 #include "common/status.h"
 #include "http/http_handler.h"
-#include "olap/base_compaction.h"
-#include "olap/storage_engine.h"
 #include "olap/tablet.h"
 
 namespace doris {
 
-enum CompactionActionType {
+enum class CompactionActionType {
     SHOW_INFO = 1,
     RUN_COMPACTION = 2,
     RUN_COMPACTION_STATUS = 3,
@@ -41,7 +39,7 @@ class CompactionAction : public HttpHandler {
 public:
     CompactionAction(CompactionActionType type) : _type(type) {}
 
-    virtual ~CompactionAction() {}
+    ~CompactionAction() override = default;
 
     void handle(HttpRequest* req) override;
 
@@ -61,15 +59,8 @@ private:
     /// check param and fetch tablet_id from req
     Status _check_param(HttpRequest* req, uint64_t* tablet_id);
 
-    std::shared_ptr<CumulativeCompactionPolicy> _create_cumulative_compaction_policy();
-
 private:
     CompactionActionType _type;
-
-    /// running check mutex
-    static std::mutex _compaction_running_mutex;
-    /// whether there is manual compaction running
-    static bool _is_compaction_running;
 };
 
 } // end namespace doris

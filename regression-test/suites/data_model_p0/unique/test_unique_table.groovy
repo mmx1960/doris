@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-suite("test_unique_table", "data_model") {
+suite("test_unique_table") {
     def dbName = "test_unique_db"
     List<List<Object>> db = sql "show databases like '${dbName}'"
     if (db.size() == 0) {
@@ -24,7 +24,7 @@ suite("test_unique_table", "data_model") {
     sql "use ${dbName}"
 
     // test uniq table
-    def tbName = "test_uniq"
+    def tbName = "test_uniq_table"
     sql "DROP TABLE IF EXISTS ${tbName}"
     sql """
             CREATE TABLE IF NOT EXISTS ${tbName} (

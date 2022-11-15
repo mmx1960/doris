@@ -180,6 +180,10 @@ public class Function implements Writable {
         this.retType = type;
     }
 
+    public void setArgType(Type type, int i) {
+        argTypes[i] = type;
+    }
+
     public Type[] getArgs() {
         return argTypes;
     }
@@ -195,6 +199,10 @@ public class Function implements Writable {
 
     public void setLocation(URI loc) {
         location = loc;
+    }
+
+    public void setName(FunctionName name) {
+        this.name = name;
     }
 
     public TFunctionBinaryType getBinaryType() {
@@ -517,6 +525,8 @@ public class Function implements Writable {
             case QUANTILE_STATE:
             case STRING:
                 return "string_val";
+            case JSONB:
+                return "jsonb_val";
             case DATE:
             case DATETIME:
                 return "datetime_val";
@@ -567,6 +577,8 @@ public class Function implements Writable {
             case QUANTILE_STATE:
             case STRING:
                 return "StringVal";
+            case JSONB:
+                return "JsonbVal";
             case DATE:
             case DATETIME:
                 return "DateTimeVal";
@@ -782,6 +794,10 @@ public class Function implements Writable {
 
     boolean isVectorized() {
         return vectorized;
+    }
+
+    public void setNullableMode(NullableMode nullableMode) {
+        this.nullableMode = nullableMode;
     }
 
     public NullableMode getNullableMode() {

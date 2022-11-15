@@ -75,6 +75,7 @@ import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Optional;
 import java.util.Set;
 import java.util.stream.Collectors;
@@ -424,15 +425,16 @@ public class OlapTable extends Table {
     /**
      * Reset properties to correct values.
      */
-    public void resetPropertiesForRestore() {
+    public void resetPropertiesForRestore(boolean reserveDynamicPartitionEnable, ReplicaAllocation replicaAlloc) {
         if (tableProperty != null) {
-            tableProperty.resetPropertiesForRestore();
+            tableProperty.resetPropertiesForRestore(reserveDynamicPartitionEnable, replicaAlloc);
         }
         // remove colocate property.
         setColocateGroup(null);
     }
 
-    public Status resetIdsForRestore(Env env, Database db, ReplicaAllocation restoreReplicaAlloc) {
+    public Status resetIdsForRestore(Env env, Database db, ReplicaAllocation restoreReplicaAlloc,
+                                     boolean reserveReplica) {
         // table id
         id = env.getNextId();
 
@@ -463,14 +465,24 @@ public class OlapTable extends Table {
         if (partitionInfo.getType() == PartitionType.RANGE || partitionInfo.getType() == PartitionType.LIST) {
             for (Map.Entry<String, Long> entry : origPartNameToId.entrySet()) {
                 long newPartId = env.getNextId();
-                partitionInfo.resetPartitionIdForRestore(newPartId, entry.getValue(), restoreReplicaAlloc, false);
+                if (reserveReplica) {
+                    ReplicaAllocation originReplicaAlloc = partitionInfo.getReplicaAllocation(entry.getValue());
+                    partitionInfo.resetPartitionIdForRestore(newPartId, entry.getValue(), originReplicaAlloc, false);
+                } else {
+                    partitionInfo.resetPartitionIdForRestore(newPartId, entry.getValue(), restoreReplicaAlloc, false);
+                }
                 idToPartition.put(newPartId, idToPartition.remove(entry.getValue()));
             }
         } else {
             // Single partitioned
             long newPartId = env.getNextId();
             for (Map.Entry<String, Long> entry : origPartNameToId.entrySet()) {
-                partitionInfo.resetPartitionIdForRestore(newPartId, entry.getValue(), restoreReplicaAlloc, true);
+                if (reserveReplica) {
+                    ReplicaAllocation originReplicaAlloc = partitionInfo.getReplicaAllocation(entry.getValue());
+                    partitionInfo.resetPartitionIdForRestore(newPartId, entry.getValue(), originReplicaAlloc, true);
+                } else {
+                    partitionInfo.resetPartitionIdForRestore(newPartId, entry.getValue(), restoreReplicaAlloc, true);
+                }
                 idToPartition.put(newPartId, idToPartition.remove(entry.getValue()));
             }
         }
@@ -694,14 +706,14 @@ public class OlapTable extends Table {
         nameToPartition.put(partition.getName(), partition);
     }
 
-    // This is a private methid.
+    // This is a private method.
     // Call public "dropPartitionAndReserveTablet" and "dropPartition"
     private Partition dropPartition(long dbId, String partitionName, boolean isForceDrop, boolean reserveTablets) {
         // 1. If "isForceDrop" is false, the partition will be added to the Catalog Recyle bin, and all tablets of this
         //    partition will not be deleted.
-        // 2. If "ifForceDrop" is true, the partition will be dropped the immediately, but whether to drop the tablets
+        // 2. If "ifForceDrop" is true, the partition will be dropped immediately, but whether to drop the tablets
         //    of this partition depends on "reserveTablets"
-        //    If "reserveTablets" is true, the tablets of this partition will not to deleted.
+        //    If "reserveTablets" is true, the tablets of this partition will not be deleted.
         //    Otherwise, the tablets of this partition will be deleted immediately.
         Partition partition = nameToPartition.get(partitionName);
         if (partition != null) {
@@ -729,7 +741,7 @@ public class OlapTable extends Table {
                     try {
                         dummyKey = PartitionKey.createInfinityPartitionKey(dummyColumns, false);
                     } catch (AnalysisException e) {
-                        e.printStackTrace();
+                        LOG.warn("should not happen", e);
                     }
                     Range<PartitionKey> dummyRange = Range.open(new PartitionKey(), dummyKey);
 
@@ -855,7 +867,7 @@ public class OlapTable extends Table {
     }
 
     public List<Long> getPartitionIds() {
-        return getPartitions().stream().map(entity -> entity.getId()).collect(Collectors.toList());
+        return new ArrayList<>(idToPartition.keySet());
     }
 
     public Set<String> getCopiedBfColumns() {
@@ -885,8 +897,16 @@ public class OlapTable extends Table {
         this.hasSequenceCol = true;
         this.sequenceType = type;
 
-        // sequence column is value column with REPLACE aggregate type
-        Column sequenceCol = ColumnDef.newSequenceColumnDef(type, AggregateType.REPLACE).toColumn();
+        Column sequenceCol;
+        if (getEnableUniqueKeyMergeOnWrite()) {
+            // sequence column is value column with NONE aggregate type for
+            // unique key table with merge on write
+            sequenceCol = ColumnDef.newSequenceColumnDef(type, AggregateType.NONE).toColumn();
+        } else {
+            // sequence column is value column with REPLACE aggregate type for
+            // unique key table
+            sequenceCol = ColumnDef.newSequenceColumnDef(type, AggregateType.REPLACE).toColumn();
+        }
         // add sequence column at last
         fullSchema.add(sequenceCol);
         nameToColumn.put(Column.SEQUENCE_COL, sequenceCol);
@@ -1118,7 +1138,7 @@ public class OlapTable extends Table {
             out.writeDouble(bfFpp);
         }
 
-        //colocateTable
+        // colocateTable
         if (colocateGroup == null) {
             out.writeBoolean(false);
         } else {
@@ -1241,14 +1261,6 @@ public class OlapTable extends Table {
         // After that, some properties of fullSchema and nameToColumn may be not same as properties of base columns.
         // So, here we need to rebuild the fullSchema to ensure the correctness of the properties.
         rebuildFullSchema();
-    }
-
-    @Override
-    public boolean equals(Table table) {
-        if (this == table) {
-            return true;
-        }
-        return table instanceof OlapTable;
     }
 
     public OlapTable selectiveCopy(Collection<String> reservedPartitions, IndexExtState extState, boolean isForBackup) {
@@ -1422,7 +1434,7 @@ public class OlapTable extends Table {
                 Map<Tag, List<Long>> tag2beIds = Maps.newHashMap();
                 for (long beId : replicaBackendIds) {
                     Backend be = infoService.getBackend(beId);
-                    if (be == null) {
+                    if (be == null || !be.isMixNode()) {
                         continue;
                     }
                     short num = currentReplicaAlloc.getOrDefault(be.getLocationTag(), (short) 0);
@@ -1479,6 +1491,39 @@ public class OlapTable extends Table {
     @Override
     public List<Column> getBaseSchema(boolean full) {
         return getSchemaByIndexId(baseIndexId, full);
+    }
+
+    @Override
+    public boolean equals(Object o) {
+        if (this == o) {
+            return true;
+        }
+        if (o == null || getClass() != o.getClass()) {
+            return false;
+        }
+        OlapTable other = (OlapTable) o;
+
+        if (!Objects.equals(defaultDistributionInfo, other.defaultDistributionInfo)) {
+            return false;
+        }
+
+        return Double.compare(other.bfFpp, bfFpp) == 0 && hasSequenceCol == other.hasSequenceCol
+                && baseIndexId == other.baseIndexId && state == other.state && Objects.equals(indexIdToMeta,
+                other.indexIdToMeta) && Objects.equals(indexNameToId, other.indexNameToId) && keysType == other.keysType
+                && Objects.equals(partitionInfo, other.partitionInfo) && Objects.equals(
+                idToPartition, other.idToPartition) && Objects.equals(nameToPartition,
+                other.nameToPartition) && Objects.equals(tempPartitions, other.tempPartitions)
+                && Objects.equals(bfColumns, other.bfColumns) && Objects.equals(colocateGroup,
+                other.colocateGroup) && Objects.equals(sequenceType, other.sequenceType)
+                && Objects.equals(indexes, other.indexes) && Objects.equals(tableProperty,
+                other.tableProperty);
+    }
+
+    @Override
+    public int hashCode() {
+        return Objects.hash(state, indexIdToMeta, indexNameToId, keysType, partitionInfo, idToPartition,
+                nameToPartition, defaultDistributionInfo, tempPartitions, bfColumns, bfFpp, colocateGroup,
+                hasSequenceCol, sequenceType, indexes, baseIndexId, tableProperty);
     }
 
     public Column getBaseColumn(String columnName) {
@@ -1572,6 +1617,22 @@ public class OlapTable extends Table {
             return tableProperty.getStoragePolicy();
         }
         return "";
+    }
+
+    public void setDisableAutoCompaction(boolean disableAutoCompaction) {
+        if (tableProperty == null) {
+            tableProperty = new TableProperty(new HashMap<>());
+        }
+        tableProperty.modifyTableProperties(PropertyAnalyzer.PROPERTIES_DISABLE_AUTO_COMPACTION,
+                Boolean.valueOf(disableAutoCompaction).toString());
+        tableProperty.buildDisableAutoCompaction();
+    }
+
+    public Boolean disableAutoCompaction() {
+        if (tableProperty != null) {
+            return tableProperty.disableAutoCompaction();
+        }
+        return false;
     }
 
     public void setDataSortInfo(DataSortInfo dataSortInfo) {
@@ -1835,7 +1896,7 @@ public class OlapTable extends Table {
                     Map<Tag, Short> curMap = Maps.newHashMap();
                     for (Replica replica : tablet.getReplicas()) {
                         Backend be = infoService.getBackend(replica.getBackendId());
-                        if (be == null) {
+                        if (be == null || !be.isMixNode()) {
                             continue;
                         }
                         short num = curMap.getOrDefault(be.getLocationTag(), (short) 0);
@@ -1860,7 +1921,7 @@ public class OlapTable extends Table {
         tableProperty.buildReplicaAllocation();
     }
 
-    //for light schema change
+    // for light schema change
     public void initSchemaColumnUniqueId() {
         if (!getEnableLightSchemaChange()) {
             return;
@@ -1869,5 +1930,9 @@ public class OlapTable extends Table {
         for (MaterializedIndexMeta indexMeta : indexIdToMeta.values()) {
             indexMeta.initSchemaColumnUniqueId();
         }
+    }
+
+    public Set<Long> getPartitionKeys() {
+        return idToPartition.keySet();
     }
 }

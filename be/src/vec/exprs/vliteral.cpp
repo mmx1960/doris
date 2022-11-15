@@ -19,6 +19,7 @@
 
 #include <fmt/format.h>
 
+#include "runtime/jsonb_value.h"
 #include "runtime/large_int_value.h"
 #include "util/string_parser.hpp"
 #include "vec/core/field.h"
@@ -124,6 +125,13 @@ void VLiteral::init(const TExprNode& node) {
             field = node.string_literal.value;
             break;
         }
+        case TYPE_JSONB: {
+            DCHECK_EQ(node.node_type, TExprNodeType::JSON_LITERAL);
+            DCHECK(node.__isset.json_literal);
+            JsonBinaryValue value(node.json_literal.value);
+            field = JsonbField(value.value(), value.size());
+            break;
+        }
         case TYPE_DECIMALV2: {
             DCHECK_EQ(node.node_type, TExprNodeType::DECIMAL_LITERAL);
             DCHECK(node.__isset.decimal_literal);
@@ -178,24 +186,30 @@ void VLiteral::init(const TExprNode& node) {
 
 Status VLiteral::execute(VExprContext* context, vectorized::Block* block, int* result_column_id) {
     // Literal expr should return least one row.
-    size_t row_size = std::max(block->rows(), size_t(1));
+    size_t row_size = std::max(block->rows(), _column_ptr->size());
     *result_column_id = VExpr::insert_param(block, {_column_ptr, _data_type, _expr_name}, row_size);
     return Status::OK();
 }
 
 std::string VLiteral::debug_string() const {
     std::stringstream out;
-    out << "VLiteral (type = " << _data_type->get_name();
-    out << ", value = ";
-    if (_column_ptr.get()->size() > 0) {
-        StringRef ref = _column_ptr.get()->get_data_at(0);
+    out << "VLiteral (name = " << _expr_name;
+    out << ", type = " << _data_type->get_name();
+    out << ", value = (";
+    for (size_t i = 0; i < _column_ptr->size(); i++) {
+        if (i != 0) {
+            out << ", ";
+        }
+        StringRef ref = _column_ptr->get_data_at(i);
         if (ref.data == nullptr) {
             out << "null";
         } else {
             switch (_type.type) {
             case TYPE_BOOLEAN:
             case TYPE_TINYINT:
+                out << *(reinterpret_cast<const int8_t*>(ref.data));
             case TYPE_SMALLINT:
+                out << *(reinterpret_cast<const int16_t*>(ref.data));
             case TYPE_INT: {
                 out << *(reinterpret_cast<const int32_t*>(ref.data));
                 break;
@@ -222,12 +236,23 @@ std::string VLiteral::debug_string() const {
             case TYPE_DATETIME: {
                 auto value = *(reinterpret_cast<const int64_t*>(ref.data));
                 auto date_value = (VecDateTimeValue*)&value;
-                out << date_value;
+                out << *date_value;
+                break;
+            }
+            case TYPE_DATEV2: {
+                auto* value = (DateV2Value<DateV2ValueType>*)ref.data;
+                out << *value;
+                break;
+            }
+            case TYPE_DATETIMEV2: {
+                auto* value = (DateV2Value<DateTimeV2ValueType>*)ref.data;
+                out << *value;
                 break;
             }
             case TYPE_STRING:
             case TYPE_CHAR:
-            case TYPE_VARCHAR: {
+            case TYPE_VARCHAR:
+            case TYPE_JSONB: {
                 out << ref;
                 break;
             }
@@ -258,7 +283,7 @@ std::string VLiteral::debug_string() const {
             }
         }
     }
-    out << ")";
+    out << "))";
     return out.str();
 }
 } // namespace vectorized

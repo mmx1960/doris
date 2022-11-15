@@ -74,7 +74,7 @@ You need to configure the LDAP basic information in the fe/conf/ldap.conf file, 
 #### Set the LDAP administrator password:
 After configuring the ldap.conf file, start fe, log in to Doris with the root or admin account, and execute sql:  
 ```sql
-set ldap_admin_password = 'ldap_admin_password';
+set ldap_admin_password = password('ldap_admin_password');
 ```
 
 ### Client-side configuration  
@@ -171,5 +171,3 @@ If jack also belongs to the LDAP groups doris_qa, doris_pm; Doris exists roles: 
 ## Limitations of LDAP authentication
 
 * The current LDAP feature of Doris only supports plaintext password authentication, that is, when a user logs in, the password is transmitted in plaintext between client and fe and between fe and LDAP service.
-* The current LDAP authentication only supports password authentication under mysql protocol. If you use the Http interface, you cannot use LDAP users for authentication.
-* Temporary users do not have user properties.

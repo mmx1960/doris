@@ -31,7 +31,7 @@ import org.apache.doris.mysql.MysqlCapability;
 import org.apache.doris.mysql.MysqlChannel;
 import org.apache.doris.mysql.MysqlCommand;
 import org.apache.doris.mysql.MysqlSerializer;
-import org.apache.doris.mysql.privilege.PaloRole;
+import org.apache.doris.nereids.StatementContext;
 import org.apache.doris.plugin.AuditEvent.AuditEventBuilder;
 import org.apache.doris.resource.Tag;
 import org.apache.doris.thrift.TResourceInfo;
@@ -39,6 +39,7 @@ import org.apache.doris.thrift.TUniqueId;
 import org.apache.doris.transaction.TransactionEntry;
 import org.apache.doris.transaction.TransactionStatus;
 
+import com.google.common.base.Strings;
 import com.google.common.collect.Lists;
 import com.google.common.collect.Sets;
 import io.opentelemetry.api.trace.Tracer;
@@ -63,6 +64,7 @@ public class ConnectContext {
     protected volatile long forwardedStmtId;
 
     protected volatile TUniqueId queryId;
+    protected volatile String traceId;
     // id for this connection
     protected volatile int connectionId;
     // mysql net
@@ -88,8 +90,6 @@ public class ConnectContext {
     // LDAP authenticated but the Doris account does not exist,
     // set the flag, and the user login Doris as Temporary user.
     protected volatile boolean isTempUser = false;
-    // Save the privs from the ldap groups.
-    protected volatile PaloRole ldapGroupsPrivs = null;
     // username@host combination for the Doris account
     // that the server used to authenticate the current client.
     // In other word, currentUserIdentity is the entry that matched in Doris auth table.
@@ -147,6 +147,14 @@ public class ConnectContext {
 
     private SessionContext sessionContext;
 
+    private long userQueryTimeout;
+
+    public void setUserQueryTimeout(long queryTimeout) {
+        this.userQueryTimeout = queryTimeout;
+    }
+
+    private StatementContext statementContext;
+
     public SessionContext getSessionContext() {
         return sessionContext;
     }
@@ -189,13 +197,7 @@ public class ConnectContext {
     }
 
     public ConnectContext() {
-        state = new QueryState();
-        returnRows = 0;
-        serverCapability = MysqlCapability.DEFAULT_CAPABILITY;
-        isKilled = false;
-        serializer = MysqlSerializer.newInstance();
-        sessionVariable = VariableMgr.newSessionVariable();
-        command = MysqlCommand.COM_SLEEP;
+        this(null);
     }
 
     public ConnectContext(SocketChannel channel) {
@@ -319,14 +321,6 @@ public class ConnectContext {
 
     public void setIsTempUser(boolean isTempUser) {
         this.isTempUser = isTempUser;
-    }
-
-    public PaloRole getLdapGroupsPrivs() {
-        return ldapGroupsPrivs;
-    }
-
-    public void setLdapGroupsPrivs(PaloRole ldapGroupsPrivs) {
-        this.ldapGroupsPrivs = ldapGroupsPrivs;
     }
 
     // for USER() function
@@ -480,6 +474,17 @@ public class ConnectContext {
 
     public void setQueryId(TUniqueId queryId) {
         this.queryId = queryId;
+        if (connectScheduler != null && !Strings.isNullOrEmpty(traceId)) {
+            connectScheduler.putTraceId2QueryId(traceId, queryId);
+        }
+    }
+
+    public void setTraceId(String traceId) {
+        this.traceId = traceId;
+    }
+
+    public String traceId() {
+        return traceId;
     }
 
     public TUniqueId queryId() {
@@ -508,6 +513,14 @@ public class ConnectContext {
 
     public void initTracer(String name) {
         this.tracer = Telemetry.getOpenTelemetry().getTracer(name);
+    }
+
+    public StatementContext getStatementContext() {
+        return statementContext;
+    }
+
+    public void setStatementContext(StatementContext statementContext) {
+        this.statementContext = statementContext;
     }
 
     // kill operation with no protect.
@@ -549,12 +562,23 @@ public class ConnectContext {
                 killConnection = true;
             }
         } else {
-            if (delta > sessionVariable.getQueryTimeoutS() * 1000) {
-                LOG.warn("kill query timeout, remote: {}, query timeout: {}",
-                        getMysqlChannel().getRemoteHostPortString(), sessionVariable.getQueryTimeoutS());
+            if (userQueryTimeout > 0) {
+                // user set query_timeout property
+                if (delta > userQueryTimeout * 1000) {
+                    LOG.warn("kill query timeout, remote: {}, query timeout: {}",
+                            getMysqlChannel().getRemoteHostPortString(), userQueryTimeout);
 
-                // Only kill
-                killFlag = true;
+                    killFlag = true;
+                }
+            } else {
+                // default use session query_timeout
+                if (delta > sessionVariable.getQueryTimeoutS() * 1000) {
+                    LOG.warn("kill query timeout, remote: {}, query timeout: {}",
+                            getMysqlChannel().getRemoteHostPortString(), sessionVariable.getQueryTimeoutS());
+
+                    // Only kill
+                    killFlag = true;
+                }
             }
         }
         if (killFlag) {

@@ -17,14 +17,11 @@
 
 #pragma once
 
-#ifdef LIBJVM
-#include <hdfs/hdfs.h>
 #include <jni.h>
 
 #include "common/status.h"
 #include "gutil/macros.h"
-#include "gutil/strings/substitute.h"
-#include "util//thrift_util.h"
+#include "util/thrift_util.h"
 
 namespace doris {
 
@@ -157,5 +154,3 @@ Status SerializeThriftMsg(JNIEnv* env, T* msg, jbyteArray* serialized_msg) {
 }
 
 } // namespace doris
-
-#endif

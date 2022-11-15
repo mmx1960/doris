@@ -28,7 +28,7 @@ public:
     using BasePtr = MinMaxFuncBase*;
     template <PrimitiveType type>
     static BasePtr get_function() {
-        return new (std::nothrow) MinMaxNumFunc<typename PrimitiveTypeTraits<type>::CppType>();
+        return new MinMaxNumFunc<typename PrimitiveTypeTraits<type>::CppType>();
     };
 };
 
@@ -39,18 +39,18 @@ public:
     template <PrimitiveType type>
     static BasePtr get_function() {
         using CppType = typename PrimitiveTypeTraits<type>::CppType;
-        using Set = std::conditional_t<std::is_same_v<CppType, StringValue>, StringValueSet,
+        using Set = std::conditional_t<std::is_same_v<CppType, StringValue>, StringSet,
                                        HybridSet<type, is_vec>>;
-        return new (std::nothrow) Set();
+        return new Set();
     };
 };
 
 class BloomFilterTraits {
 public:
-    using BasePtr = IBloomFilterFuncBase*;
+    using BasePtr = BloomFilterFuncBase*;
     template <PrimitiveType type>
     static BasePtr get_function() {
-        return new BloomFilterFunc<type, CurrentBloomFilterAdaptor>();
+        return new BloomFilterFunc<type>();
     };
 };
 
@@ -122,13 +122,12 @@ inline auto create_minmax_filter(PrimitiveType type) {
     return create_predicate_function<MinmaxFunctionTraits>(type);
 }
 
-inline auto create_set(PrimitiveType type) {
-    return create_predicate_function<HybridSetTraits<false>>(type);
-}
-
-// used for VInPredicate
-inline auto vec_create_set(PrimitiveType type) {
-    return create_predicate_function<HybridSetTraits<true>>(type);
+inline auto create_set(PrimitiveType type, bool is_vectorized = false) {
+    if (is_vectorized) {
+        return create_predicate_function<HybridSetTraits<true>>(type);
+    } else {
+        return create_predicate_function<HybridSetTraits<false>>(type);
+    }
 }
 
 inline auto create_bloom_filter(PrimitiveType type) {

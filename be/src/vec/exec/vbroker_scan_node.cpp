@@ -246,11 +246,7 @@ Status VBrokerScanNode::scanner_scan(const TBrokerScanRange& scan_range, Scanner
                // stop pushing more batch if
                // 1. too many batches in queue, or
                // 2. at least one batch in queue and memory exceed limit.
-               (_block_queue.size() >= _max_buffered_batches ||
-                (thread_context()
-                         ->_thread_mem_tracker_mgr->limiter_mem_tracker()
-                         ->any_limit_exceeded() &&
-                 !_block_queue.empty()))) {
+               (_block_queue.size() >= _max_buffered_batches || !_block_queue.empty())) {
             _queue_writer_cond.wait_for(l, std::chrono::seconds(1));
         }
         // Process already set failed, so we just return OK
@@ -266,7 +262,7 @@ Status VBrokerScanNode::scanner_scan(const TBrokerScanRange& scan_range, Scanner
             return Status::Cancelled("Cancelled");
         }
         // Queue size Must be smaller than _max_buffered_batches
-        _block_queue.push_back(block);
+        _block_queue.push_back(std::move(block));
 
         // Notify reader to process
         _queue_reader_cond.notify_one();
@@ -277,7 +273,7 @@ Status VBrokerScanNode::scanner_scan(const TBrokerScanRange& scan_range, Scanner
 void VBrokerScanNode::scanner_worker(int start_idx, int length) {
     START_AND_SCOPE_SPAN(_runtime_state->get_tracer(), span, "VBrokerScanNode::scanner_worker");
     SCOPED_ATTACH_TASK(_runtime_state);
-    SCOPED_CONSUME_MEM_TRACKER(mem_tracker());
+    SCOPED_CONSUME_MEM_TRACKER(mem_tracker_shared());
     Thread::set_self_name("vbroker_scanner");
     Status status = Status::OK();
     ScannerCounter counter;

@@ -110,14 +110,22 @@ set(UTIL_FILES
   tuple_row_zorder_compare.cpp
   telemetry/telemetry.cpp
   telemetry/brpc_carrier.cpp
+  telemetry/open_telemetry_scop_wrapper.hpp
   quantile_state.cpp
   jni-util.cpp
+  exception.cpp
+  libjvm_loader.cpp
 )
 
 if (WITH_MYSQL)
     set(UTIL_FILES ${UTIL_FILES}
         mysql_load_error_hub.cpp
         )
+endif()
+
+if (OS_MACOSX)
+    list(REMOVE_ITEM UTIL_FILES perf_counters.cpp disk_info.cpp)
+    list(APPEND UTIL_FILES perf_counters_mac.cpp disk_info_mac.cpp)
 endif()
 
 add_library(Util STATIC

@@ -162,6 +162,38 @@ FROM data_source [data_source_properties]
 
      `"strict_mode" = "true"`
 
+     strict mode 模式的意思是：对于导入过程中的列类型转换进行严格过滤。严格过滤的策略如下：
+
+     1. 对于列类型转换来说，如果 strict mode 为true，则错误的数据将被 filter。这里的错误数据是指：原始数据并不为空值，在参与列类型转换后结果为空值的这一类数据。
+     2. 对于导入的某列由函数变换生成时，strict mode 对其不产生影响。
+     3. 对于导入的某列类型包含范围限制的，如果原始数据能正常通过类型转换，但无法通过范围限制的，strict mode 对其也不产生影响。例如：如果类型是 decimal(1,0), 原始数据为 10，则属于可以通过类型转换但不在列声明的范围内。这种数据 strict 对其不产生影响。
+
+     **strict mode 与 source data 的导入关系**
+
+     这里以列类型为 TinyInt 来举例
+
+     > 注：当表中的列允许导入空值时
+
+     | source data | source data example | string to int | strict_mode   | result                 |
+     | ----------- | ------------------- | ------------- | ------------- | ---------------------- |
+     | 空值        | \N                  | N/A           | true or false | NULL                   |
+     | not null    | aaa or 2000         | NULL          | true          | invalid data(filtered) |
+     | not null    | aaa                 | NULL          | false         | NULL                   |
+     | not null    | 1                   | 1             | true or false | correct data           |
+
+     这里以列类型为 Decimal(1,0) 举例
+
+     > 注：当表中的列允许导入空值时
+
+     | source data | source data example | string to int | strict_mode   | result                 |
+     | ----------- | ------------------- | ------------- | ------------- | ---------------------- |
+     | 空值        | \N                  | N/A           | true or false | NULL                   |
+     | not null    | aaa                 | NULL          | true          | invalid data(filtered) |
+     | not null    | aaa                 | NULL          | false         | NULL                   |
+     | not null    | 1 or 10             | 1             | true or false | correct data           |
+
+     > 注意：10 虽然是一个超过范围的值，但是因为其类型符合 decimal的要求，所以 strict mode对其不产生影响。10 最后会在其他 ETL 处理流程中被过滤。但不会被 strict mode 过滤。
+
   5. `timezone`
 
      指定导入作业所使用的时区。默认为使用 Session 的 timezone 参数。该参数会影响所有导入涉及的和时区有关的函数结果。
@@ -187,6 +219,14 @@ FROM data_source [data_source_properties]
      当导入数据格式为 json 时，可以通过 json_root 指定 Json 数据的根节点。Doris 将通过 json_root 抽取根节点的元素进行解析。默认为空。
 
      `-H "json_root: $.RECORDS"`
+  
+  10. `send_batch_parallelism`
+
+      整型，用于设置发送批处理数据的并行度，如果并行度的值超过 BE 配置中的 `max_send_batch_parallelism_per_job`，那么作为协调点的 BE 将使用 `max_send_batch_parallelism_per_job` 的值。 
+
+  11. `load_to_single_tablet`
+
+      布尔类型，为 true 表示支持一个任务只导入数据到对应分区的一个 tablet，默认值为 false，该参数只允许在对带有 random 分区的 olap 表导数的时候设置。
 
 - `FROM data_source [data_source_properties]`
 

@@ -37,6 +37,8 @@ import org.apache.doris.analysis.RangePartitionDesc;
 import org.apache.doris.analysis.SlotRef;
 import org.apache.doris.catalog.ArrayType;
 import org.apache.doris.catalog.Column;
+import org.apache.doris.catalog.Env;
+import org.apache.doris.catalog.ScalarType;
 import org.apache.doris.catalog.Type;
 import org.apache.doris.common.AnalysisException;
 import org.apache.doris.common.DdlException;
@@ -49,6 +51,7 @@ import org.json.simple.JSONObject;
 import org.json.simple.JSONValue;
 
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
@@ -191,12 +194,13 @@ public class EsUtil {
         return properties;
     }
 
-    private static QueryBuilder toCompoundEsDsl(Expr expr, List<Expr> notPushDownList) {
+    private static QueryBuilder toCompoundEsDsl(Expr expr, List<Expr> notPushDownList,
+            Map<String, String> fieldsContext) {
         CompoundPredicate compoundPredicate = (CompoundPredicate) expr;
         switch (compoundPredicate.getOp()) {
             case AND: {
-                QueryBuilder left = toEsDsl(compoundPredicate.getChild(0), notPushDownList);
-                QueryBuilder right = toEsDsl(compoundPredicate.getChild(1), notPushDownList);
+                QueryBuilder left = toEsDsl(compoundPredicate.getChild(0), notPushDownList, fieldsContext);
+                QueryBuilder right = toEsDsl(compoundPredicate.getChild(1), notPushDownList, fieldsContext);
                 if (left != null && right != null) {
                     return QueryBuilders.boolQuery().must(left).must(right);
                 }
@@ -204,8 +208,8 @@ public class EsUtil {
             }
             case OR: {
                 int beforeSize = notPushDownList.size();
-                QueryBuilder left = toEsDsl(compoundPredicate.getChild(0), notPushDownList);
-                QueryBuilder right = toEsDsl(compoundPredicate.getChild(1), notPushDownList);
+                QueryBuilder left = toEsDsl(compoundPredicate.getChild(0), notPushDownList, fieldsContext);
+                QueryBuilder right = toEsDsl(compoundPredicate.getChild(1), notPushDownList, fieldsContext);
                 int afterSize = notPushDownList.size();
                 if (left != null && right != null) {
                     return QueryBuilders.boolQuery().should(left).should(right);
@@ -223,7 +227,7 @@ public class EsUtil {
                 return null;
             }
             case NOT: {
-                QueryBuilder child = toEsDsl(compoundPredicate.getChild(0), notPushDownList);
+                QueryBuilder child = toEsDsl(compoundPredicate.getChild(0), notPushDownList, fieldsContext);
                 if (child != null) {
                     return QueryBuilders.boolQuery().mustNot(child);
                 }
@@ -234,28 +238,47 @@ public class EsUtil {
         }
     }
 
+    private static Expr exprWithoutCast(Expr expr) {
+        if (expr instanceof CastExpr) {
+            return exprWithoutCast(expr.getChild(0));
+        }
+        return expr;
+    }
+
     public static QueryBuilder toEsDsl(Expr expr) {
-        return toEsDsl(expr, new ArrayList<>());
+        return toEsDsl(expr, new ArrayList<>(), new HashMap<>());
     }
 
     /**
      * Doris expr to es dsl.
      **/
-    public static QueryBuilder toEsDsl(Expr expr, List<Expr> notPushDownList) {
+    public static QueryBuilder toEsDsl(Expr expr, List<Expr> notPushDownList, Map<String, String> fieldsContext) {
         if (expr == null) {
             return null;
         }
         // CompoundPredicate, `between` also converted to CompoundPredicate.
         if (expr instanceof CompoundPredicate) {
-            return toCompoundEsDsl(expr, notPushDownList);
+            return toCompoundEsDsl(expr, notPushDownList, fieldsContext);
         }
         TExprOpcode opCode = expr.getOpcode();
-        // Cast can not pushdown
-        if (expr.getChild(0) instanceof CastExpr || expr.getChild(1) instanceof CastExpr) {
-            notPushDownList.add(expr);
-            return null;
+        String column;
+        Expr leftExpr = expr.getChild(0);
+        // Type transformed cast can not pushdown
+        if (leftExpr instanceof CastExpr) {
+            Expr withoutCastExpr = exprWithoutCast(leftExpr);
+            // pushdown col(float) >= 3
+            if (withoutCastExpr.getType().equals(leftExpr.getType()) || (withoutCastExpr.getType().isFloatingPointType()
+                    && leftExpr.getType().isFloatingPointType())) {
+                column = ((SlotRef) withoutCastExpr).getColumnName();
+            } else {
+                notPushDownList.add(expr);
+                return null;
+            }
+        } else {
+            column = ((SlotRef) leftExpr).getColumnName();
         }
-        String column = ((SlotRef) expr.getChild(0)).getColumnName();
+        // Replace col with col.keyword if mapping exist.
+        column = fieldsContext.getOrDefault(column, column);
         if (expr instanceof BinaryPredicate) {
             Object value = toDorisLiteral(expr.getChild(1));
             switch (opCode) {
@@ -341,22 +364,24 @@ public class EsUtil {
         List<Column> columns = new ArrayList<>();
         for (String key : keys) {
             JSONObject field = (JSONObject) mappingProps.get(key);
-            // Complex types are not currently supported.
+            Type type;
+            // Complex types are treating as String types for now.
             if (field.containsKey("type")) {
-                Type type = toDorisType(field.get("type").toString());
-                if (!type.isInvalid()) {
-                    Column column = new Column();
-                    column.setName(key);
-                    column.setIsKey(true);
-                    column.setIsAllowNull(true);
-                    if (arrayFields.contains(key)) {
-                        column.setType(ArrayType.create(type, true));
-                    } else {
-                        column.setType(type);
-                    }
-                    columns.add(column);
-                }
+                type = toDorisType(field.get("type").toString());
+            } else {
+                type = Type.STRING;
             }
+            Column column = new Column();
+            column.setName(key);
+            column.setIsKey(true);
+            column.setIsAllowNull(true);
+            column.setUniqueId((int) Env.getCurrentEnv().getNextId());
+            if (arrayFields.contains(key)) {
+                column.setType(ArrayType.create(type, true));
+            } else {
+                column.setType(type);
+            }
+            columns.add(column);
         }
         return columns;
     }
@@ -378,24 +403,24 @@ public class EsUtil {
             case "integer":
                 return Type.INT;
             case "long":
-            case "unsigned_long":
                 return Type.BIGINT;
+            case "unsigned_long":
+                return Type.LARGEINT;
             case "float":
             case "half_float":
                 return Type.FLOAT;
             case "double":
             case "scaled_float":
                 return Type.DOUBLE;
+            case "date":
+                return ScalarType.getDefaultDateType(Type.DATE);
             case "keyword":
             case "text":
             case "ip":
             case "nested":
             case "object":
-                return Type.STRING;
-            case "date":
-                return Type.DATE;
             default:
-                return Type.INVALID;
+                return ScalarType.createStringType();
         }
     }
 

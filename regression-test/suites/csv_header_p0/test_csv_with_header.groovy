@@ -63,6 +63,7 @@ suite("test_csv_with_header") {
         while(max_try_secs--) {
             result = sql "show load where label = '${checklabel}'"
             if(result[0][2] == "FINISHED") {
+                sql "sync"
                 result_count = sql "select count(*) from ${testTable4}"
                 assertEquals(result_count[0][0], expected_rows)
                 break
@@ -78,14 +79,18 @@ suite("test_csv_with_header") {
 
     sql "DROP TABLE IF EXISTS ${testTable}"
     def result1 = sql """
-            CREATE TABLE `${testTable}` (
+            CREATE TABLE IF NOT EXISTS `${testTable}` (
                 `event_day` date NULL COMMENT "",
+                `event_day1` datev2 NULL COMMENT "",
+                `event_day2` datetimev2 NULL COMMENT "",
+                `event_day3` datetimev2(3) NULL COMMENT "",
+                `event_day4` datetimev2(6) NULL COMMENT "",
                 `siteid` int(11) NULL DEFAULT "10" COMMENT "",
                 `citycode` smallint(6) NULL COMMENT "",
                 `username` varchar(32) NULL DEFAULT "" COMMENT "",
                 `pv` bigint(20) NULL DEFAULT "0" COMMENT ""
                 ) ENGINE=OLAP
-                DUPLICATE KEY(`event_day`, `siteid`, `citycode`)
+                DUPLICATE KEY(`event_day`, `event_day1`, `event_day2`, `event_day3`, `event_day4`, `siteid`, `citycode`)
                 COMMENT "OLAP"
                 DISTRIBUTED BY HASH(`siteid`) BUCKETS 10
                 PROPERTIES (
@@ -106,6 +111,7 @@ suite("test_csv_with_header") {
     label = UUID.randomUUID().toString()
     test_stream_load.call(testTable, label, format_csv_with_names_and_types, format_csv_with_names_and_types_file, expect_rows)
 
+    sql "sync"
     // check total rows
     def result_count = sql "select count(*) from ${testTable}"
     assertEquals(result_count[0][0], expect_rows*3)
@@ -172,6 +178,7 @@ suite("test_csv_with_header") {
             assertEquals(expectedTotalRows,totalLines)
         }
 
+        sql "sync"
         resultCount = sql "select count(*) from ${testTable}"
         currentTotalRows = resultCount[0][0]
 
@@ -199,6 +206,7 @@ suite("test_csv_with_header") {
         
         // select out file to hdfs 
         select_out_file = {outTable, outHdfsPath, outFormat, outHdfsFs, outBroker, outHdfsUser, outPasswd->
+            sql "sync"
             sql """
                 SELECT * FROM ${outTable}
                 INTO OUTFILE "${outHdfsPath}"

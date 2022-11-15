@@ -33,6 +33,7 @@ import com.google.common.base.Strings;
 import com.google.common.collect.Lists;
 import com.google.common.collect.Maps;
 import org.apache.commons.lang.NotImplementedException;
+import org.apache.commons.lang.StringUtils;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 
@@ -40,8 +41,10 @@ import java.io.DataInput;
 import java.io.DataOutput;
 import java.io.IOException;
 import java.time.Instant;
+import java.util.Collections;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.locks.ReentrantReadWriteLock;
 import java.util.stream.Collectors;
@@ -58,8 +61,10 @@ public abstract class Table extends MetaObject implements Writable, TableIf {
 
     public volatile boolean isDropped = false;
 
+    private boolean hasCompoundKey = false;
     protected long id;
     protected volatile String name;
+    protected volatile String qualifiedDbName;
     protected TableType type;
     protected long createTime;
     protected ReentrantReadWriteLock rwLock;
@@ -248,6 +253,18 @@ public abstract class Table extends MetaObject implements Writable, TableIf {
         name = newName;
     }
 
+    void setQualifiedDbName(String qualifiedDbName) {
+        this.qualifiedDbName = qualifiedDbName;
+    }
+
+    public String getQualifiedName() {
+        if (StringUtils.isEmpty(qualifiedDbName)) {
+            return name;
+        } else {
+            return qualifiedDbName + "." + name;
+        }
+    }
+
     public TableType getType() {
         return type;
     }
@@ -285,6 +302,10 @@ public abstract class Table extends MetaObject implements Writable, TableIf {
         return nameToColumn.get(name);
     }
 
+    public List<Column> getColumns() {
+        return Lists.newArrayList(nameToColumn.values());
+    }
+
     public long getCreateTime() {
         return createTime;
     }
@@ -315,6 +336,8 @@ public abstract class Table extends MetaObject implements Writable, TableIf {
         TableType type = TableType.valueOf(Text.readString(in));
         if (type == TableType.OLAP) {
             table = new OlapTable();
+        } else if (type == TableType.MATERIALIZED_VIEW) {
+            table = new MaterializedView();
         } else if (type == TableType.ODBC) {
             table = new OdbcTable();
         } else if (type == TableType.MYSQL) {
@@ -331,6 +354,8 @@ public abstract class Table extends MetaObject implements Writable, TableIf {
             table = new IcebergTable();
         } else if (type == TableType.HUDI) {
             table = new HudiTable();
+        } else if (type == TableType.JDBC) {
+            table = new JdbcTable();
         } else {
             throw new IOException("Unknown table type: " + type.name());
         }
@@ -374,23 +399,25 @@ public abstract class Table extends MetaObject implements Writable, TableIf {
 
         this.id = in.readLong();
         this.name = Text.readString(in);
-
+        List<Column> keys = Lists.newArrayList();
         // base schema
         int columnCount = in.readInt();
         for (int i = 0; i < columnCount; i++) {
             Column column = Column.read(in);
+            if (column.isKey()) {
+                keys.add(column);
+            }
             this.fullSchema.add(column);
             this.nameToColumn.put(column.getName(), column);
         }
-
+        if (keys.size() > 1) {
+            keys.forEach(key -> key.setCompoundKey(true));
+            hasCompoundKey = true;
+        }
         comment = Text.readString(in);
 
         // read create time
         this.createTime = in.readLong();
-    }
-
-    public boolean equals(Table table) {
-        return true;
     }
 
     // return if this table is partitioned.
@@ -467,5 +494,13 @@ public abstract class Table extends MetaObject implements Writable, TableIf {
         }
 
         return true;
+    }
+
+    public boolean isHasCompoundKey() {
+        return hasCompoundKey;
+    }
+
+    public Set<String> getPartitionNames() {
+        return Collections.EMPTY_SET;
     }
 }

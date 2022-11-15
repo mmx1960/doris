@@ -28,7 +28,7 @@ under the License.
 
 ### description
 
-ARRAY\<T\>
+`ARRAY<T>`
 
 由T类型元素组成的数组，不能作为key列使用。目前支持在Duplicate模型的表中使用。
 
@@ -38,10 +38,6 @@ T支持的类型有：
 BOOLEAN, TINYINT, SMALLINT, INT, BIGINT, LARGEINT, FLOAT, DOUBLE, DECIMAL, DATE,
 DATETIME, CHAR, VARCHAR, STRING
 ```
-
-### notice
-
-使用前需要在fe.conf中添加`enable_array_type=true`配置项
 
 ### example
 
@@ -66,7 +62,7 @@ PROPERTIES (
 
 ```
 mysql> INSERT INTO `array_test` VALUES (1, [1,2,3,4,5]);
-mysql> INSERT INTO `array_test` VALUES (2, array(6,7,8)), (3, array()), (4, null);
+mysql> INSERT INTO `array_test` VALUES (2, [6,7,8]), (3, []), (4, null);
 ```
 
 查询数据示例：
@@ -85,4 +81,4 @@ mysql> SELECT * FROM `array_test`;
 
 ### keywords
 
-    ARRAY, array_contains, array_position, element_at
+    ARRAY

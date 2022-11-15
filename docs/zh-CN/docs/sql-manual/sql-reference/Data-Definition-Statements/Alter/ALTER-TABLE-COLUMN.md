@@ -116,6 +116,7 @@ MODIFY COLUMN column_name column_type [KEY | agg_type] [NULL | NOT NULL] [DEFAUL
   - DATE 转换成 DATETIME(时分秒自动补零， 例如: `2019-12-09` <--> `2019-12-09 00:00:00`)
   - FLOAT 转换成 DOUBLE
   - INT 转换成 DATE (如果INT类型数据不合法则转换失败，原始数据不变)
+  - 除DATE与DATETIME以外都可以转换成STRING，但是STRING不能转换任何其他类型
 
 5. 对指定 index 的列进行重新排序
 
@@ -213,6 +214,14 @@ ALTER TABLE example_db.my_table
 ADD COLUMN v2 INT MAX DEFAULT "0" AFTER k2 TO example_rollup_index,
 ORDER BY (k3,k1,k2,v2,v1) FROM example_rollup_index;
 ```
+
+11. 修改Duplicate key 表 Key 列的某个字段的长度
+
+```sql
+alter table example_tbl modify column k3 varchar(50) key null comment 'to 50'
+```
+
+
 
 ### Keywords
 

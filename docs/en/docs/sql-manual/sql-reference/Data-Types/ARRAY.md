@@ -38,9 +38,6 @@ T-type could be any of:
 BOOLEAN, TINYINT, SMALLINT, INT, BIGINT, LARGEINT, FLOAT, DOUBLE, DECIMAL, DATE,
 DATETIME, CHAR, VARCHAR, STRING
 ```
-### notice
-
-We should add config `enable_array_type=true` inside fe.conf before use ARRAY
 
 ### example
 
@@ -65,7 +62,7 @@ Insert data example:
 
 ```
 mysql> INSERT INTO `array_test` VALUES (1, [1,2,3,4,5]);
-mysql> INSERT INTO `array_test` VALUES (2, array(6,7,8)), (3, array()), (4, null);
+mysql> INSERT INTO `array_test` VALUES (2, [6,7,8]), (3, []), (4, null);
 ```
 
 Select data example:
@@ -84,4 +81,4 @@ mysql> SELECT * FROM `array_test`;
 
 ### keywords
 
-    ARRAY, array_contains, array_position, element_at
+    ARRAY

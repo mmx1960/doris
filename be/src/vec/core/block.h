@@ -32,7 +32,6 @@
 #include "runtime/descriptors.h"
 #include "vec/columns/column.h"
 #include "vec/columns/column_nullable.h"
-#include "vec/core/block_info.h"
 #include "vec/core/column_with_type_and_name.h"
 #include "vec/core/columns_with_type_and_name.h"
 #include "vec/core/names.h"
@@ -65,9 +64,12 @@ private:
     Container data;
     IndexByName index_by_name;
 
-public:
-    BlockInfo info;
+    int64_t _decompress_time_ns = 0;
+    int64_t _decompressed_bytes = 0;
 
+    mutable int64_t _compress_time_ns = 0;
+
+public:
     Block() = default;
     Block(std::initializer_list<ColumnWithTypeAndName> il);
     Block(const ColumnsWithTypeAndName& data_);
@@ -252,7 +254,18 @@ public:
     // copy a new block by the offset column
     Block copy_block(const std::vector<int>& column_offset) const;
 
-    static Status filter_block(Block* block, int filter_conlumn_id, int column_to_keep);
+    void append_block_by_selector(MutableColumns& columns, const IColumn::Selector& selector) const;
+
+    static void filter_block_internal(Block* block, const std::vector<uint32_t>& columns_to_filter,
+                                      const IColumn::Filter& filter);
+
+    static void filter_block_internal(Block* block, const IColumn::Filter& filter,
+                                      uint32_t column_to_keep);
+
+    static Status filter_block(Block* block, const std::vector<uint32_t>& columns_to_filter,
+                               int filter_column_id, int column_to_keep);
+
+    static Status filter_block(Block* block, int filter_column_id, int column_to_keep);
 
     static void erase_useless_column(Block* block, int column_to_keep) {
         for (int i = block->columns() - 1; i >= column_to_keep; --i) {
@@ -261,7 +274,8 @@ public:
     }
 
     // serialize block to PBlock
-    Status serialize(PBlock* pblock, size_t* uncompressed_bytes, size_t* compressed_bytes,
+    Status serialize(int be_exec_version, PBlock* pblock, size_t* uncompressed_bytes,
+                     size_t* compressed_bytes, segment_v2::CompressionTypePB compression_type,
                      bool allow_transfer_large_data = false) const;
 
     // serialize block to PRowbatch
@@ -333,7 +347,12 @@ public:
     doris::Tuple* deep_copy_tuple(const TupleDescriptor&, MemPool*, int, int,
                                   bool padding_char = false);
 
+    // for String type or Array<String> type
     void shrink_char_type_column_suffix_zero(const std::vector<size_t>& char_type_idx);
+
+    int64_t get_decompress_time() const { return _decompress_time_ns; }
+    int64_t get_decompressed_bytes() const { return _decompressed_bytes; }
+    int64_t get_compress_time() const { return _compress_time_ns; }
 
 private:
     void erase_impl(size_t position);
@@ -362,7 +381,7 @@ public:
     MutableBlock() = default;
     ~MutableBlock() = default;
 
-    MutableBlock(const std::vector<TupleDescriptor*>& tuple_descs);
+    MutableBlock(const std::vector<TupleDescriptor*>& tuple_descs, int reserve_size = 0);
 
     MutableBlock(Block* block)
             : _columns(block->mutate_columns()), _data_types(block->get_data_types()) {}
@@ -481,6 +500,25 @@ public:
         return res;
     }
 };
+
+struct IteratorRowRef {
+    std::shared_ptr<Block> block;
+    int row_pos;
+    bool is_same;
+
+    template <typename T>
+    int compare(const IteratorRowRef& rhs, const T& compare_arguments) const {
+        return block->compare_at(row_pos, rhs.row_pos, compare_arguments, *rhs.block, -1);
+    }
+
+    void reset() {
+        block = nullptr;
+        row_pos = -1;
+        is_same = false;
+    }
+};
+
+using BlockView = std::vector<IteratorRowRef>;
 
 } // namespace vectorized
 } // namespace doris

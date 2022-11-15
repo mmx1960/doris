@@ -42,7 +42,6 @@ import java.util.Set;
 import java.util.stream.Collectors;
 
 public class TableFunctionNode extends PlanNode {
-
     private List<LateralViewRef> lateralViewRefs;
     private ArrayList<Expr> fnCallExprList;
     private List<TupleId> lateralViewTupleIds;
@@ -55,6 +54,7 @@ public class TableFunctionNode extends PlanNode {
         super(id, "TABLE FUNCTION NODE", StatisticalType.TABLE_FUNCTION_NODE);
         tupleIds.addAll(inputNode.getTupleIds());
         tblRefIds.addAll(inputNode.getTupleIds());
+        tblRefIds.addAll(inputNode.getTblRefIds());
         lateralViewTupleIds = lateralViewRefs.stream().map(e -> e.getDesc().getId())
                 .collect(Collectors.toList());
         tupleIds.addAll(lateralViewTupleIds);
@@ -100,11 +100,23 @@ public class TableFunctionNode extends PlanNode {
         for (Expr resultExpr : baseTblResultExprs) {
             // find all slotRef bound by tupleIds in resultExpr
             resultExpr.getSlotRefsBoundByTupleIds(tupleIds, outputSlotRef);
+
+            // For vec engine while lateral view involves subquery
+            Expr dst = outputSmap.get(resultExpr);
+            if (dst != null) {
+                dst.getSlotRefsBoundByTupleIds(tupleIds, outputSlotRef);
+            }
         }
         // case2
         List<Expr> remainConjuncts = analyzer.getRemainConjuncts(tupleIds);
         for (Expr expr : remainConjuncts) {
             expr.getSlotRefsBoundByTupleIds(tupleIds, outputSlotRef);
+
+            // For vec engine while lateral view involves subquery
+            Expr dst = outputSmap.get(expr);
+            if (dst != null) {
+                dst.getSlotRefsBoundByTupleIds(tupleIds, outputSlotRef);
+            }
         }
         // set output slot ids
         for (SlotRef slotRef : outputSlotRef) {
@@ -137,31 +149,32 @@ public class TableFunctionNode extends PlanNode {
         super.computeStats(analyzer);
 
         StatsRecursiveDerive.getStatsRecursiveDerive().statsRecursiveDerive(this);
-        cardinality = statsDeriveResult.getRowCount();
+        cardinality = (long) statsDeriveResult.getRowCount();
     }
 
     @Override
     public String getNodeExplainString(String prefix, TExplainLevel detailLevel) {
         StringBuilder output = new StringBuilder();
-        output.append(prefix + "table function: ");
+        output.append(prefix).append("table function: ");
         for (Expr fnExpr : fnCallExprList) {
-            output.append(fnExpr.toSql() + " ");
+            output.append(fnExpr.toSql()).append(" ");
         }
         output.append("\n");
 
-        output.append(prefix + "lateral view tuple id: ");
+        output.append(prefix).append("lateral view tuple id: ");
         for (TupleId tupleId : lateralViewTupleIds) {
-            output.append(tupleId.asInt() + " ");
+            output.append(tupleId.asInt()).append(" ");
         }
         output.append("\n");
 
         if (detailLevel == TExplainLevel.BRIEF) {
+            output.append(prefix).append(String.format("cardinality=%s", cardinality)).append("\n");
             return output.toString();
         }
 
-        output.append(prefix + "output slot id: ");
+        output.append(prefix).append("output slot id: ");
         for (SlotId slotId : outputSlotIds) {
-            output.append(slotId.asInt() + " ");
+            output.append(slotId.asInt()).append(" ");
         }
         output.append("\n");
 

@@ -347,13 +347,8 @@ DiskIoMgr::~DiskIoMgr() {
 }
 
 Status DiskIoMgr::init(const int64_t mem_limit) {
-    _mem_tracker = std::make_unique<MemTrackerLimiter>(mem_limit, "DiskIO");
-    // If we hit the process limit, see if we can reclaim some memory by removing
-    // previously allocated (but unused) io buffers.
-    // TODO(zxy) After clearing the free buffer, how much impact will it have on subsequent
-    // queries may need to be verified.
-    ExecEnv::GetInstance()->process_mem_tracker()->add_gc_function(
-            std::bind<void>(&DiskIoMgr::gc_io_buffers, this, std::placeholders::_1));
+    _mem_tracker = std::make_unique<MemTrackerLimiter>(MemTrackerLimiter::Type::GLOBAL, "DiskIO",
+                                                       mem_limit);
 
     for (int i = 0; i < _disk_queues.size(); ++i) {
         _disk_queues[i] = new DiskQueue(i);
@@ -960,7 +955,6 @@ void DiskIoMgr::work_loop(DiskQueue* disk_queue) {
     //   3. Perform the read or write as specified.
     // Cancellation checking needs to happen in both steps 1 and 3.
 
-    thread_context()->_thread_mem_tracker_mgr->set_check_attach(false);
     while (!_shut_down) {
         RequestContext* worker_context = nullptr;
         ;

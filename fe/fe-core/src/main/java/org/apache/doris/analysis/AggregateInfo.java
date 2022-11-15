@@ -523,16 +523,8 @@ public final class AggregateInfo extends AggregateInfoBase {
             if (exprList.size() > 1) {
                 continue;
             }
-            Expr expr = exprList.get(0);
-            if (!(expr instanceof SlotRef)) {
-                continue;
-            }
-            SlotRef slotRef = (SlotRef) expr;
-            Expr right = smap.get(slotRef);
-            if (right == null) {
-                continue;
-            }
-            slotDesc.setIsNullable(right.isNullable());
+            Expr srcExpr = exprList.get(0).substitute(smap);
+            slotDesc.setIsNullable(srcExpr.isNullable() || slotDesc.getIsNullable());
         }
     }
 
@@ -840,6 +832,30 @@ public final class AggregateInfo extends AggregateInfoBase {
                 slotRef.setType(slotRef.getDesc().getType());
             }
         }
+    }
+
+    public void updateMaterializedSlots() {
+        // why output and intermediate may have different materialized slots?
+        // because some slot is materialized by materializeSrcExpr method directly
+        // in that case, only output slots is materialized
+        // assume output tuple has correct marterialized infomation
+        // we update intermediate tuple and materializedSlots based on output tuple
+        materializedSlots.clear();
+        ArrayList<SlotDescriptor> outputSlots = outputTupleDesc.getSlots();
+        int groupingExprNum = groupingExprs != null ? groupingExprs.size() : 0;
+        Preconditions.checkState(groupingExprNum <= outputSlots.size());
+        for (int i = groupingExprNum; i < outputSlots.size(); ++i) {
+            if (outputSlots.get(i).isMaterialized()) {
+                materializedSlots.add(i - groupingExprNum);
+            }
+        }
+
+        ArrayList<SlotDescriptor> intermediateSlots = intermediateTupleDesc.getSlots();
+        Preconditions.checkState(intermediateSlots.size() == outputSlots.size());
+        for (int i = 0; i < outputSlots.size(); ++i) {
+            intermediateSlots.get(i).setIsMaterialized(outputSlots.get(i).isMaterialized());
+        }
+        intermediateTupleDesc.computeStatAndMemLayout();
     }
 
     /**

@@ -106,7 +106,7 @@ struct AggregateFunctionImpl<AggregateOperation::PRODUCT> {
     template <typename Element>
     struct TypeTraits {
         using ResultType = ArrayAggregateResult<Element, AggregateOperation::PRODUCT>;
-        using AggregateDataType = AggregateFunctionProductData<Element>;
+        using AggregateDataType = AggregateFunctionProductData<ResultType>;
         using Function = AggregateFunctionProduct<Element, ResultType, AggregateDataType>;
     };
 };
@@ -159,14 +159,19 @@ struct ArrayAggregateImpl {
         const IColumn* data = array.get_data_ptr().get();
 
         const auto& offsets = array.get_offsets();
-        if (execute_type<Int8>(res, type, data, offsets) ||
+        if (execute_type<UInt8>(res, type, data, offsets) ||
+            execute_type<Int8>(res, type, data, offsets) ||
             execute_type<Int16>(res, type, data, offsets) ||
             execute_type<Int32>(res, type, data, offsets) ||
             execute_type<Int64>(res, type, data, offsets) ||
             execute_type<Int128>(res, type, data, offsets) ||
             execute_type<Float32>(res, type, data, offsets) ||
             execute_type<Float64>(res, type, data, offsets) ||
-            execute_type<Decimal128>(res, type, data, offsets)) {
+            execute_type<Decimal128>(res, type, data, offsets) ||
+            execute_type<Date>(res, type, data, offsets) ||
+            execute_type<DateTime>(res, type, data, offsets) ||
+            execute_type<DateV2>(res, type, data, offsets) ||
+            execute_type<DateTimeV2>(res, type, data, offsets)) {
             block.replace_by_position(result, std::move(res));
             return Status::OK();
         } else {
@@ -176,7 +181,7 @@ struct ArrayAggregateImpl {
 
     template <typename Element>
     static bool execute_type(ColumnPtr& res_ptr, const DataTypePtr& type, const IColumn* data,
-                             const ColumnArray::Offsets& offsets) {
+                             const ColumnArray::Offsets64& offsets) {
         using ColVecType = ColumnVectorOrDecimal<Element>;
         using ResultType = ArrayAggregateResult<Element, operation>;
         using ColVecResultType = ColumnVectorOrDecimal<ResultType>;

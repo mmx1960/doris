@@ -82,7 +82,7 @@ Hdfs load creates an import statement. The import method is basically the same a
 
 3. Check import status
 
-   Broker load is an asynchronous import method. The specific import results can be accessed through [SHOW LOAD](../../../sql-manual/sql-reference/Show-Statements/SHOW-LOAD.html#show-load) command to view
+   Broker load is an asynchronous import method. The specific import results can be accessed through [SHOW LOAD](../../../../sql-manual/sql-reference/Show-Statements/SHOW-LOAD) command to view
    
    ```
    mysql> show load order by createtime desc limit 1\G;
@@ -114,7 +114,7 @@ Starting from version 0.14, Doris supports the direct import of data from online
 This document mainly introduces how to import data stored in AWS S3. It also supports the import of other object storage systems that support the S3 protocol.
 ### Applicable scenarios
 
-* Source data in S3 protocol accessible storage systems, such as S3, BOS.
+* Source data in S3 protocol accessible storage systems, such as S3.
 * Data volumes range from tens to hundreds of GB.
 
 ### Preparing

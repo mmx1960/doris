@@ -193,6 +193,9 @@ public class Database extends MetaObject implements Writable, DatabaseIf<Table> 
         writeLock();
         try {
             this.fullQualifiedName = newName;
+            for (Table table : idToTable.values()) {
+                table.setQualifiedDbName(fullQualifiedName);
+            }
         } finally {
             writeUnlock();
         }
@@ -330,6 +333,7 @@ public class Database extends MetaObject implements Writable, DatabaseIf<Table> 
         // if a table is already exists, then edit log won't be executed
         // some caller of this method may need to know this message
         boolean isTableExist = false;
+        table.setQualifiedDbName(fullQualifiedName);
         writeLockOrDdlException();
         try {
             String tableName = table.getName();
@@ -353,7 +357,7 @@ public class Database extends MetaObject implements Writable, DatabaseIf<Table> 
                     Env.getCurrentEnv().getEsRepository().registerTable((EsTable) table);
                 }
             }
-            return Pair.create(result, isTableExist);
+            return Pair.of(result, isTableExist);
         } finally {
             writeUnlock();
         }
@@ -361,6 +365,7 @@ public class Database extends MetaObject implements Writable, DatabaseIf<Table> 
 
     public boolean createTable(Table table) {
         boolean result = true;
+        table.setQualifiedDbName(fullQualifiedName);
         String tableName = table.getName();
         if (Env.isStoredTableNamesLowerCase()) {
             tableName = tableName.toLowerCase();
@@ -411,7 +416,7 @@ public class Database extends MetaObject implements Writable, DatabaseIf<Table> 
     }
 
     /**
-     *  this method is used for get existed table list by table id list, if table not exist, just ignore it.
+     * this method is used for get existed table list by table id list, if table not exist, just ignore it.
      */
     public List<Table> getTablesOnIdOrderIfExist(List<Long> tableIdList) {
         List<Table> tableList = Lists.newArrayListWithCapacity(tableIdList.size());
@@ -564,6 +569,7 @@ public class Database extends MetaObject implements Writable, DatabaseIf<Table> 
         int numTables = in.readInt();
         for (int i = 0; i < numTables; ++i) {
             Table table = Table.read(in);
+            table.setQualifiedDbName(fullQualifiedName);
             String tableName = table.getName();
             nameToTable.put(tableName, table);
             idToTable.put(table.getId(), table);
@@ -614,25 +620,12 @@ public class Database extends MetaObject implements Writable, DatabaseIf<Table> 
             return false;
         }
 
-        Database database = (Database) obj;
+        Database other = (Database) obj;
 
-        if (idToTable != database.idToTable) {
-            if (idToTable.size() != database.idToTable.size()) {
-                return false;
-            }
-            for (Entry<Long, Table> entry : idToTable.entrySet()) {
-                long key = entry.getKey();
-                if (!database.idToTable.containsKey(key)) {
-                    return false;
-                }
-                if (!entry.getValue().equals(database.idToTable.get(key))) {
-                    return false;
-                }
-            }
-        }
-
-        return (id == database.id) && (fullQualifiedName.equals(database.fullQualifiedName)
-                && dataQuotaBytes == database.dataQuotaBytes);
+        return id == other.id
+                && idToTable.equals(other.idToTable)
+                && fullQualifiedName.equals(other.fullQualifiedName)
+                && dataQuotaBytes == other.dataQuotaBytes;
     }
 
     public String getClusterName() {
@@ -664,6 +657,9 @@ public class Database extends MetaObject implements Writable, DatabaseIf<Table> 
 
     public void setName(String name) {
         this.fullQualifiedName = name;
+        for (Table table : nameToTable.values()) {
+            table.setQualifiedDbName(name);
+        }
     }
 
     public synchronized void addFunction(Function function) throws UserException {
@@ -779,25 +775,30 @@ public class Database extends MetaObject implements Writable, DatabaseIf<Table> 
         return ClusterNamespace.getNameFromFullName(fullQualifiedName).equalsIgnoreCase(InfoSchemaDb.DATABASE_NAME);
     }
 
-    public synchronized void addEncryptKey(EncryptKey encryptKey) throws UserException {
-        addEncryptKeyImpl(encryptKey, false);
-        Env.getCurrentEnv().getEditLog().logAddEncryptKey(encryptKey);
+    public synchronized void addEncryptKey(EncryptKey encryptKey, boolean ifNotExists) throws UserException {
+        if (addEncryptKeyImpl(encryptKey, false, ifNotExists)) {
+            Env.getCurrentEnv().getEditLog().logAddEncryptKey(encryptKey);
+        }
     }
 
     public synchronized void replayAddEncryptKey(EncryptKey encryptKey) {
         try {
-            addEncryptKeyImpl(encryptKey, true);
+            addEncryptKeyImpl(encryptKey, true, true);
         } catch (UserException e) {
             Preconditions.checkArgument(false);
         }
     }
 
-    private void addEncryptKeyImpl(EncryptKey encryptKey, boolean isReplay) throws UserException {
+    private boolean addEncryptKeyImpl(EncryptKey encryptKey, boolean isReplay, boolean ifNotExists)
+            throws UserException {
         String keyName = encryptKey.getEncryptKeyName().getKeyName();
         EncryptKey existKey = dbEncryptKey.getName2EncryptKey().get(keyName);
         if (!isReplay) {
             if (existKey != null) {
                 if (existKey.isIdentical(encryptKey)) {
+                    if (ifNotExists) {
+                        return false;
+                    }
                     throw new UserException("encryptKey ["
                             + existKey.getEncryptKeyName().toString() + "] already exists");
                 }
@@ -805,25 +806,32 @@ public class Database extends MetaObject implements Writable, DatabaseIf<Table> 
         }
 
         dbEncryptKey.getName2EncryptKey().put(keyName, encryptKey);
+        return true;
     }
 
-    public synchronized void dropEncryptKey(EncryptKeySearchDesc encryptKeySearchDesc) throws UserException {
-        dropEncryptKeyImpl(encryptKeySearchDesc);
-        Env.getCurrentEnv().getEditLog().logDropEncryptKey(encryptKeySearchDesc);
+    public synchronized void dropEncryptKey(EncryptKeySearchDesc encryptKeySearchDesc, boolean ifExists)
+            throws UserException {
+        if (dropEncryptKeyImpl(encryptKeySearchDesc, ifExists)) {
+            Env.getCurrentEnv().getEditLog().logDropEncryptKey(encryptKeySearchDesc);
+        }
     }
 
     public synchronized void replayDropEncryptKey(EncryptKeySearchDesc encryptKeySearchDesc) {
         try {
-            dropEncryptKeyImpl(encryptKeySearchDesc);
+            dropEncryptKeyImpl(encryptKeySearchDesc, true);
         } catch (UserException e) {
             Preconditions.checkArgument(false);
         }
     }
 
-    private void dropEncryptKeyImpl(EncryptKeySearchDesc encryptKeySearchDesc) throws UserException {
+    private boolean dropEncryptKeyImpl(EncryptKeySearchDesc encryptKeySearchDesc, boolean ifExists)
+            throws UserException {
         String keyName = encryptKeySearchDesc.getKeyEncryptKeyName().getKeyName();
         EncryptKey existKey = dbEncryptKey.getName2EncryptKey().get(keyName);
         if (existKey == null) {
+            if (ifExists) {
+                return false;
+            }
             throw new UserException("Unknown encryptKey, encryptKey=" + encryptKeySearchDesc.toString());
         }
         boolean isFound = false;
@@ -831,9 +839,13 @@ public class Database extends MetaObject implements Writable, DatabaseIf<Table> 
             isFound = true;
         }
         if (!isFound) {
+            if (ifExists) {
+                return false;
+            }
             throw new UserException("Unknown encryptKey, encryptKey=" + encryptKeySearchDesc.toString());
         }
         dbEncryptKey.getName2EncryptKey().remove(keyName);
+        return true;
     }
 
     public synchronized List<EncryptKey> getEncryptKeys() {

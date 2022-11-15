@@ -99,7 +99,7 @@ curl --location-trusted -u user:passwd [-H ""...] -T data.file -XPUT http://fe_h
 
 11. exec_mem_limit: 导入内存限制。默认为 2GB。单位为字节。
 
-12. format: 指定导入数据格式，默认是csv，支持json格式。
+12. format: 指定导入数据格式，默认是csv，也支持：csv_with_names(支持csv文件行首过滤)，csv_with_names_and_types(支持csv文件前两行过滤) 或 json格式。
 
 13. jsonpaths: 导入json方式分为：简单模式和匹配模式。
     
@@ -126,14 +126,21 @@ curl --location-trusted -u user:passwd [-H ""...] -T data.file -XPUT http://fe_h
 17. delete: 仅在 MERGE下有意义， 表示数据的删除条件
         function_column.sequence_col: 只适用于UNIQUE_KEYS,相同key列下，保证value列按照source_sequence列进行REPLACE, source_sequence可以是数据源中的列，也可以是表结构中的一列。
     
-18. fuzzy_parse: 布尔类型，为true表示json将以第一行为schema 进行解析，开启这个选项可以提高json 导入效率，但是要求所有json 对象的key的顺序和第一行一致， 默认为false，仅用于json 格式
+18. fuzzy_parse: 布尔类型，为true表示json将以第一行为schema 进行解析，开启这个选项可以提高 json 导入效率，但是要求所有json 对象的key的顺序和第一行一致， 默认为false，仅用于json 格式
     
 19. num_as_string: 布尔类型，为true表示在解析json数据时会将数字类型转为字符串，然后在确保不会出现精度丢失的情况下进行导入。
     
 20. read_json_by_line: 布尔类型，为true表示支持每行读取一个json对象，默认值为false。
     
 21. send_batch_parallelism: 整型，用于设置发送批处理数据的并行度，如果并行度的值超过 BE 配置中的 `max_send_batch_parallelism_per_job`，那么作为协调点的 BE 将使用 `max_send_batch_parallelism_per_job` 的值。
-    
+
+22. hidden_columns: 用于指定导入数据中包含的隐藏列，在Header中不包含columns时生效，多个hidden column用逗号分割。
+      ```
+           hidden_columns: __DORIS_DELETE_SIGN__,__DORIS_SEQUENCE_COL__
+           系统会使用用户指定的数据导入数据。在上述用例中，导入数据中最后一列数据为__DORIS_SEQUENCE_COL__。
+       ```
+23. load_to_single_tablet: 布尔类型，为true表示支持一个任务只导入数据到对应分区的一个 tablet，默认值为 false，该参数只允许在对带有 random 分区的 olap 表导数的时候设置。
+
     RETURN VALUES
         导入完成后，会以Json格式返回这次导入的相关内容。当前包括以下字段
         Status: 导入最后的状态。
@@ -160,11 +167,14 @@ ERRORS:
         可以通过以下语句查看导入错误详细信息：
 
        ```sql
-        SHOW LOAD WARNINGS ON 'url
+        SHOW LOAD WARNINGS ON 'url'
        ```
 
+    其中 url 为 ErrorURL 给出的 url。
 
-​        其中 url 为 ErrorURL 给出的 url。
+23: compress_type
+
+    指定文件的压缩格式。目前只支持 csv 文件的压缩。支持 gz, lzo, bz2, lz4, lzop, deflate 压缩格式。
 
 ### Example
 

@@ -30,6 +30,8 @@ import org.apache.doris.catalog.ScalarType;
 import org.apache.doris.catalog.Type;
 import org.apache.doris.common.AnalysisException;
 import org.apache.doris.common.Config;
+import org.apache.doris.datasource.EsExternalCatalog;
+import org.apache.doris.external.elasticsearch.EsUtil;
 import org.apache.doris.policy.Policy;
 import org.apache.doris.policy.StoragePolicy;
 import org.apache.doris.resource.Tag;
@@ -113,6 +115,8 @@ public class PropertyAnalyzer {
     public static final String PROPERTIES_DISABLE_LOAD = "disable_load";
 
     public static final String PROPERTIES_STORAGE_POLICY = "storage_policy";
+
+    public static final String PROPERTIES_DISABLE_AUTO_COMPACTION = "disable_auto_compaction";
 
     private static final Logger LOG = LogManager.getLogger(PropertyAnalyzer.class);
     private static final String COMMA_SEPARATOR = ",";
@@ -378,7 +382,8 @@ public class PropertyAnalyzer {
                         // tinyint/float/double columns don't support
                         // key columns and none/replace aggregate non-key columns support
                         if (type == PrimitiveType.TINYINT || type == PrimitiveType.FLOAT
-                                || type == PrimitiveType.DOUBLE || type == PrimitiveType.BOOLEAN) {
+                                || type == PrimitiveType.DOUBLE || type == PrimitiveType.BOOLEAN
+                                || type.isArrayType()) {
                             throw new AnalysisException(type + " is not supported in bloom filter index. "
                                     + "invalid column: " + bfColumn);
                         } else if (keysType != KeysType.AGG_KEYS || column.isKey()) {
@@ -469,6 +474,25 @@ public class PropertyAnalyzer {
             return false;
         }
         throw new AnalysisException(PROPERTIES_ENABLE_LIGHT_SCHEMA_CHANGE
+                + " must be `true` or `false`");
+    }
+
+    public static Boolean analyzeDisableAutoCompaction(Map<String, String> properties) throws AnalysisException {
+        if (properties == null || properties.isEmpty()) {
+            return false;
+        }
+        String value = properties.get(PROPERTIES_DISABLE_AUTO_COMPACTION);
+        // set light schema change false by default
+        if (null == value) {
+            return false;
+        }
+        properties.remove(PROPERTIES_DISABLE_AUTO_COMPACTION);
+        if (value.equalsIgnoreCase("true")) {
+            return true;
+        } else if (value.equalsIgnoreCase("false")) {
+            return false;
+        }
+        throw new AnalysisException(PROPERTIES_DISABLE_AUTO_COMPACTION
                 + " must be `true` or `false`");
     }
 
@@ -631,7 +655,8 @@ public class PropertyAnalyzer {
                 continue;
             }
             String val = entry.getValue().replaceAll(" ", "");
-            tagMap.put(keyParts[1], val);
+            Tag tag = Tag.create(keyParts[1], val);
+            tagMap.put(tag.type, tag.value);
             iter.remove();
         }
         if (tagMap.isEmpty() && defaultValue != null) {
@@ -754,7 +779,42 @@ public class PropertyAnalyzer {
         } else if (value.equals("false")) {
             return false;
         }
-        throw new AnalysisException(PropertyAnalyzer.ENABLE_UNIQUE_KEY_MERGE_ON_WRITE
-                                    + " must be `true` or `false`");
+        throw new AnalysisException(PropertyAnalyzer.ENABLE_UNIQUE_KEY_MERGE_ON_WRITE + " must be `true` or `false`");
+    }
+
+
+    /**
+     * Check the type property of the catalog props.
+     */
+    public static void checkCatalogProperties(Map<String, String> properties, boolean isAlter)
+            throws AnalysisException {
+        if (!properties.containsKey("type") && !isAlter) {
+            // For "alter catalog" stmt, no need to contain "type".
+            // For "create catalog" stmt, must contain "type"
+            throw new AnalysisException("All the external catalog should contain the 'type' property.");
+        }
+
+        // validate the properties of es catalog
+        if (properties.get("type").equalsIgnoreCase("es")) {
+            try {
+                if (properties.containsKey(EsExternalCatalog.PROP_SSL)) {
+                    EsUtil.getBoolean(properties, EsExternalCatalog.PROP_SSL);
+                }
+
+                if (properties.containsKey(EsExternalCatalog.PROP_DOC_VALUE_SCAN)) {
+                    EsUtil.getBoolean(properties, EsExternalCatalog.PROP_DOC_VALUE_SCAN);
+                }
+
+                if (properties.containsKey(EsExternalCatalog.PROP_KEYWORD_SNIFF)) {
+                    EsUtil.getBoolean(properties, EsExternalCatalog.PROP_KEYWORD_SNIFF);
+                }
+
+                if (properties.containsKey(EsExternalCatalog.PROP_NODES_DISCOVERY)) {
+                    EsUtil.getBoolean(properties, EsExternalCatalog.PROP_NODES_DISCOVERY);
+                }
+            } catch (Exception e) {
+                throw new AnalysisException(e.getMessage());
+            }
+        }
     }
 }

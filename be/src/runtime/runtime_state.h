@@ -20,23 +20,15 @@
 
 #pragma once
 
-#include <atomic>
 #include <fstream>
-#include <memory>
-#include <mutex>
-#include <sstream>
-#include <string>
-#include <vector>
 
 #include "cctz/time_zone.h"
 #include "common/global_types.h"
 #include "common/object_pool.h"
 #include "gen_cpp/PaloInternalService_types.h" // for TQueryOptions
 #include "gen_cpp/Types_types.h"               // for TUniqueId
-#include "runtime/mem_pool.h"
 #include "runtime/query_fragments_ctx.h"
 #include "runtime/thread_resource_mgr.h"
-#include "util/logging.h"
 #include "util/runtime_profile.h"
 #include "util/telemetry/telemetry.h"
 
@@ -56,8 +48,6 @@ class TmpFileMgr;
 class BufferedBlockMgr;
 class BufferedBlockMgr2;
 class LoadErrorHub;
-class ReservationTracker;
-class InitialReservations;
 class RowDescriptor;
 class RuntimeFilterMgr;
 
@@ -86,17 +76,13 @@ public:
     Status init(const TUniqueId& fragment_instance_id, const TQueryOptions& query_options,
                 const TQueryGlobals& query_globals, ExecEnv* exec_env);
 
-    // Set up four-level hierarchy of mem trackers: process, query, fragment instance.
-    // The instance tracker is tied to our profile.
-    // Specific parts of the fragment (i.e. exec nodes, sinks, data stream senders, etc)
-    // will add a fourth level when they are initialized.
-    Status init_mem_trackers(const TUniqueId& query_id);
-
-    // for ut only
-    Status init_instance_mem_tracker();
-
-    /// Called from Init() to set up buffer reservations and the file group.
-    Status init_buffer_poolstate();
+    // after SCOPED_ATTACH_TASK;
+    void init_scanner_mem_trackers() {
+        _scanner_mem_tracker = std::make_shared<MemTracker>(
+                fmt::format("Scanner#QueryId={}", print_id(_query_id)));
+    }
+    // for ut and non-query.
+    Status init_mem_trackers(const TUniqueId& query_id = TUniqueId());
 
     // Gets/Creates the query wide block mgr.
     Status create_block_mgr();
@@ -120,6 +106,7 @@ public:
     int num_scanner_threads() const { return _query_options.num_scanner_threads; }
     TQueryType::type query_type() const { return _query_options.query_type; }
     int64_t timestamp_ms() const { return _timestamp_ms; }
+    int32_t nano_seconds() const { return _nano_seconds; }
     const std::string& timezone() const { return _timezone; }
     const cctz::time_zone& timezone_obj() const { return _timezone_obj; }
     const std::string& user() const { return _user; }
@@ -128,7 +115,7 @@ public:
     const TUniqueId& fragment_instance_id() const { return _fragment_instance_id; }
     ExecEnv* exec_env() { return _exec_env; }
     std::shared_ptr<MemTrackerLimiter> query_mem_tracker() { return _query_mem_tracker; }
-    std::shared_ptr<MemTrackerLimiter> instance_mem_tracker() { return _instance_mem_tracker; }
+    std::shared_ptr<MemTracker> scanner_mem_tracker() { return _scanner_mem_tracker; }
     ThreadResourceMgr::ResourcePool* resource_pool() { return _resource_pool; }
 
     void set_fragment_root_id(PlanNodeId id) {
@@ -319,12 +306,6 @@ public:
 
     int num_per_fragment_instances() const { return _num_per_fragment_instances; }
 
-    ReservationTracker* instance_buffer_reservation() { return _instance_buffer_reservation.get(); }
-
-    int64_t min_reservation() const { return _query_options.min_reservation; }
-
-    int64_t max_reservation() const { return _query_options.max_reservation; }
-
     bool disable_stream_preaggregations() const {
         return _query_options.disable_stream_preaggregations;
     }
@@ -339,6 +320,13 @@ public:
 
     bool enable_vectorized_exec() const { return _query_options.enable_vectorized_engine; }
 
+    int be_exec_version() const {
+        if (!_query_options.__isset.be_exec_version) {
+            return 0;
+        }
+        return _query_options.be_exec_version;
+    }
+
     bool trim_tailing_spaces_for_external_table_query() const {
         return _query_options.trim_tailing_spaces_for_external_table_query;
     }
@@ -351,10 +339,23 @@ public:
         return _query_options.enable_enable_exchange_node_parallel_merge;
     }
 
-    // the following getters are only valid after Prepare()
-    InitialReservations* initial_reservations() const { return _initial_reservations; }
+    segment_v2::CompressionTypePB fragement_transmission_compression_type() const {
+        if (_query_options.__isset.fragment_transmission_compression_codec) {
+            if (_query_options.fragment_transmission_compression_codec == "lz4") {
+                return segment_v2::CompressionTypePB::LZ4;
+            }
+        }
+        return segment_v2::CompressionTypePB::SNAPPY;
+    }
 
-    ReservationTracker* buffer_reservation() const { return _buffer_reservation; }
+    bool skip_storage_engine_merge() const {
+        return _query_options.__isset.skip_storage_engine_merge &&
+               _query_options.skip_storage_engine_merge;
+    }
+
+    bool skip_delete_predicate() const {
+        return _query_options.__isset.skip_delete_predicate && _query_options.skip_delete_predicate;
+    }
 
     const std::vector<TTabletCommitInfo>& tablet_commit_infos() const {
         return _tablet_commit_infos;
@@ -379,9 +380,15 @@ public:
 
     QueryFragmentsCtx* get_query_fragments_ctx() { return _query_ctx; }
 
+    void set_query_mem_tracker(const std::shared_ptr<MemTrackerLimiter>& tracker) {
+        _query_mem_tracker = tracker;
+    }
+
     OpentelemetryTracer get_tracer() { return _tracer; }
 
     void set_tracer(OpentelemetryTracer&& tracer) { _tracer = std::move(tracer); }
+
+    bool enable_profile() const { return _query_options.is_report_success; }
 
 private:
     // Use a custom block manager for the query for testing purposes.
@@ -393,12 +400,9 @@ private:
 
     static const int DEFAULT_BATCH_SIZE = 2048;
 
-    // MemTracker that is shared by all fragment instances running on this host.
-    // The query mem tracker must be released after the _instance_mem_tracker.
     std::shared_ptr<MemTrackerLimiter> _query_mem_tracker;
-
-    // Memory usage of this fragment instance
-    std::shared_ptr<MemTrackerLimiter> _instance_mem_tracker;
+    // Count the memory consumption of Scanner
+    std::shared_ptr<MemTracker> _scanner_mem_tracker;
 
     // put runtime state before _obj_pool, so that it will be deconstructed after
     // _obj_pool. Because some of object in _obj_pool will use profile when deconstructing.
@@ -434,6 +438,7 @@ private:
 
     //Query-global timestamp_ms
     int64_t _timestamp_ms;
+    int32_t _nano_seconds;
     std::string _timezone;
     cctz::time_zone _timezone_obj;
 
@@ -505,26 +510,6 @@ private:
     std::mutex _create_error_hub_lock;
     std::vector<TTabletCommitInfo> _tablet_commit_infos;
     std::vector<TErrorTabletInfo> _error_tablet_infos;
-
-    //TODO chenhao , remove this to QueryState
-    /// Pool of buffer reservations used to distribute initial reservations to operators
-    /// in the query. Contains a ReservationTracker that is a child of
-    /// 'buffer_reservation_'. Owned by 'obj_pool_'. Set in Prepare().
-    ReservationTracker* _buffer_reservation = nullptr;
-
-    /// Buffer reservation for this fragment instance - a child of the query buffer
-    /// reservation. Non-nullptr if 'query_state_' is not nullptr.
-    std::unique_ptr<ReservationTracker> _instance_buffer_reservation;
-
-    /// Pool of buffer reservations used to distribute initial reservations to operators
-    /// in the query. Contains a ReservationTracker that is a child of
-    /// 'buffer_reservation_'. Owned by 'obj_pool_'. Set in Prepare().
-    InitialReservations* _initial_reservations = nullptr;
-
-    /// Number of fragment instances executing, which may need to claim
-    /// from 'initial_reservations_'.
-    /// TODO: not needed if we call ReleaseResources() in a timely manner (IMPALA-1575).
-    std::atomic<int32_t> _initial_reservation_refcnt {0};
 
     QueryFragmentsCtx* _query_ctx;
 

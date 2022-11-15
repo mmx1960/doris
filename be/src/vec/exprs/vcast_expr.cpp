@@ -29,7 +29,7 @@ namespace doris::vectorized {
 
 doris::Status VCastExpr::prepare(doris::RuntimeState* state, const doris::RowDescriptor& desc,
                                  VExprContext* context) {
-    RETURN_IF_ERROR(VExpr::prepare(state, desc, context));
+    RETURN_IF_ERROR_OR_PREPARED(VExpr::prepare(state, desc, context));
 
     DCHECK_EQ(_children.size(), 1);
     auto child = _children[0];
@@ -46,7 +46,6 @@ doris::Status VCastExpr::prepare(doris::RuntimeState* state, const doris::RowDes
     argument_template.reserve(2);
     argument_template.emplace_back(std::move(child_column), child->data_type(), child_name);
     argument_template.emplace_back(_cast_param, _cast_param_data_type, _target_data_type_name);
-
     _function = SimpleFunctionFactory::instance().get_function(function_name, argument_template,
                                                                _data_type);
 
@@ -54,7 +53,7 @@ doris::Status VCastExpr::prepare(doris::RuntimeState* state, const doris::RowDes
         return Status::NotSupported("Function {} is not implemented", _fn.name.function_name);
     }
     VExpr::register_function_context(state, context);
-    _expr_name = fmt::format("(CAST {}, TO {})", child_name, _target_data_type_name);
+    _expr_name = fmt::format("(CAST {} TO {})", child_name, _target_data_type_name);
     return Status::OK();
 }
 
@@ -75,7 +74,7 @@ doris::Status VCastExpr::execute(VExprContext* context, doris::vectorized::Block
                                  int* result_column_id) {
     // for each child call execute
     int column_id = 0;
-    _children[0]->execute(context, block, &column_id);
+    RETURN_IF_ERROR(_children[0]->execute(context, block, &column_id));
 
     size_t const_param_id = VExpr::insert_param(
             block, {_cast_param, _cast_param_data_type, _target_data_type_name}, block->rows());

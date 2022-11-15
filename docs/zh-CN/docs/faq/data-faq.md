@@ -50,7 +50,7 @@ Doris支持修改数据库名、表名、分区名、物化视图（Rollup）名
 
 Unique Key模型的表是一个对业务比较友好的表，因为其特有的按照主键去重的功能，能够很方便的同步数据频繁变更的业务数据库。因此，很多用户在将数据接入到Doris时，会首先考虑使用Unique Key模型。
 
-但遗憾的是，Unique Key模型的表是无法建立物化视图的。原因在于，物化视图的本质，是通过预计算来将数据“预先算好”，这样在查询时直接返回已经计算好的数据，来加速查询。在物化视图中，“预计算”的数据通常是一些聚合指标，比如求和、求count。这时，如果数据发生变更，如udpate或delete，因为预计算的数据已经丢失了明细信息，因此无法同步的进行更新。比如一个求和值5，可能是 1+4，也可能是2+3。因为明细信息的丢失，我们无法区分这个求和值是如何计算出来的，因此也就无法满足更新的需求。
+但遗憾的是，Unique Key模型的表是无法建立物化视图的。原因在于，物化视图的本质，是通过预计算来将数据“预先算好”，这样在查询时直接返回已经计算好的数据，来加速查询。在物化视图中，“预计算”的数据通常是一些聚合指标，比如求和、求count。这时，如果数据发生变更，如update或delete，因为预计算的数据已经丢失了明细信息，因此无法同步的进行更新。比如一个求和值5，可能是 1+4，也可能是2+3。因为明细信息的丢失，我们无法区分这个求和值是如何计算出来的，因此也就无法满足更新的需求。
 
 ### Q4. tablet writer write failed, tablet_id=27306172, txn_id=28573520, err=-235 or -215 or -238
 
@@ -147,3 +147,21 @@ broker_timeout_ms = 10000
 ```
 
 这里添加参数，需要重启 FE 服务。
+
+### Q11.[ Routine load ] ReasonOfStateChanged: ErrorReason{code=errCode = 104, msg='be 10004 abort task with reason: fetch failed due to requested offset not available on the broker: Broker: Offset out of range'} 
+
+出现这个问题的原因是因为kafka的清理策略默认为7天，当某个routine load任务因为某种原因导致任务暂停，长时间没有恢复，当重新恢复任务的时候routine load记录了消费的offset,而kafka的清理策略已经清理了对应的offset,就会出现这个问题
+
+所以这个问题可以用alter routine load解决方式：
+
+查看kafka最小的offset ,使用ALTER ROUTINE LOAD命令修改offset,重新恢复任务即可
+
+```sql
+ALTER ROUTINE LOAD FOR db.tb
+FROM kafka
+(
+ "kafka_partitions" = "0",
+ "kafka_offsets" = "xxx",
+ "property.group.id" = "xxx"
+);
+```

@@ -108,10 +108,7 @@ public class ColumnDef {
     private boolean visible;
 
     public ColumnDef(String name, TypeDef typeDef) {
-        this.name = name;
-        this.typeDef = typeDef;
-        this.comment = "";
-        this.defaultValue = DefaultValue.NOT_SET;
+        this(name, typeDef, false, null, false, DefaultValue.NOT_SET, "");
     }
 
     public ColumnDef(String name, TypeDef typeDef, boolean isKey, AggregateType aggregateType,
@@ -202,12 +199,16 @@ public class ColumnDef {
         }
         FeNameFormat.checkColumnName(name);
 
-        // When string type length is not assigned, it need to be assigned to 1.
+        // When string type length is not assigned, it needs to be assigned to 1.
         if (typeDef.getType().isScalarType()) {
             final ScalarType targetType = (ScalarType) typeDef.getType();
-            if (targetType.getPrimitiveType().isStringType()
-                    && !targetType.isAssignedStrLenInColDefinition()) {
-                targetType.setLength(1);
+            if (targetType.getPrimitiveType().isStringType() && !targetType.isLengthSet()) {
+                if (targetType.getPrimitiveType() != PrimitiveType.STRING) {
+                    targetType.setLength(1);
+                } else {
+                    // always set text length MAX_STRING_LENGTH
+                    targetType.setLength(ScalarType.MAX_STRING_LENGTH);
+                }
             }
         }
 
@@ -266,6 +267,10 @@ public class ColumnDef {
         }
 
         if (type.getPrimitiveType() == PrimitiveType.ARRAY) {
+            if (isKey()) {
+                throw new AnalysisException("Array can only be used in the non-key column of"
+                        + " the duplicate table at present.");
+            }
             if (defaultValue.isSet && defaultValue != DefaultValue.NULL_DEFAULT_VALUE) {
                 throw new AnalysisException("Array type column default value only support null");
             }
@@ -274,6 +279,12 @@ public class ColumnDef {
             throw new AnalysisException("String Type should not be used in key column[" + getName()
                     + "].");
         }
+
+        if (isKey() && type.getPrimitiveType() == PrimitiveType.JSONB) {
+            throw new AnalysisException("JSONB type should not be used in key column[" + getName()
+                    + "].");
+        }
+
         if (type.getPrimitiveType() == PrimitiveType.MAP) {
             if (defaultValue.isSet && defaultValue != DefaultValue.NULL_DEFAULT_VALUE) {
                 throw new AnalysisException("Map type column default value just support null");
@@ -334,6 +345,9 @@ public class ColumnDef {
                 new FloatLiteral(defaultValue);
                 break;
             case DECIMALV2:
+                //no need to check precision and scale, since V2 is fixed point
+                new DecimalLiteral(defaultValue);
+                break;
             case DECIMAL32:
             case DECIMAL64:
             case DECIMAL128:
@@ -360,6 +374,7 @@ public class ColumnDef {
             case VARCHAR:
             case HLL:
             case STRING:
+            case JSONB:
                 if (defaultValue.length() > scalarType.getLength()) {
                     throw new AnalysisException("Default value is too long: " + defaultValue);
                 }
@@ -409,5 +424,9 @@ public class ColumnDef {
     @Override
     public String toString() {
         return toSql();
+    }
+
+    public void setAllowNull(boolean allowNull) {
+        isAllowNull = allowNull;
     }
 }

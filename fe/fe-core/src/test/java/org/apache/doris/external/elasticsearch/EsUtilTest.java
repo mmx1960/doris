@@ -30,10 +30,10 @@ import org.apache.doris.analysis.IsNullPredicate;
 import org.apache.doris.analysis.LikePredicate;
 import org.apache.doris.analysis.SlotRef;
 import org.apache.doris.analysis.StringLiteral;
-import org.apache.doris.analysis.TypeDef;
 import org.apache.doris.catalog.Column;
 import org.apache.doris.catalog.EsTable;
 import org.apache.doris.catalog.PrimitiveType;
+import org.apache.doris.catalog.Type;
 import org.apache.doris.common.ExceptionChecker;
 
 import mockit.Expectations;
@@ -47,7 +47,9 @@ import org.junit.jupiter.api.Assertions;
 import java.io.IOException;
 import java.net.URISyntaxException;
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 
 /**
  * Test for es util.
@@ -74,9 +76,15 @@ public class EsUtilTest extends EsTestCase {
         Column k1 = new Column("k1", PrimitiveType.BIGINT);
         Column k2 = new Column("k2", PrimitiveType.VARCHAR);
         Column k3 = new Column("k3", PrimitiveType.VARCHAR);
+        Column k4 = new Column("k4", PrimitiveType.VARCHAR);
+        Column k5 = new Column("k5", PrimitiveType.VARCHAR);
+        Column k6 = new Column("k6", PrimitiveType.DATE);
         columns.add(k1);
         columns.add(k2);
         columns.add(k3);
+        columns.add(k4);
+        columns.add(k5);
+        columns.add(k6);
     }
 
     @Test
@@ -120,6 +128,8 @@ public class EsUtilTest extends EsTestCase {
         Assertions.assertEquals("k3.keyword", searchContext1.docValueFieldsContext().get("k3"));
         Assertions.assertEquals("k1", searchContext1.docValueFieldsContext().get("k1"));
         Assertions.assertEquals("k2", searchContext1.docValueFieldsContext().get("k2"));
+        Assertions.assertNull(searchContext1.docValueFieldsContext().get("k4"));
+        Assertions.assertNull(searchContext1.docValueFieldsContext().get("k5"));
 
     }
 
@@ -256,12 +266,12 @@ public class EsUtilTest extends EsTestCase {
 
     @Test
     public void testCastConvertEsDsl() {
-        SlotRef k1 = new SlotRef(null, "k1");
         FloatLiteral floatLiteral = new FloatLiteral(3.14);
-        CastExpr castExpr = new CastExpr(TypeDef.create(PrimitiveType.INT), floatLiteral);
-        BinaryPredicate castPredicate = new BinaryPredicate(Operator.EQ, k1, castExpr);
+        CastExpr castExpr = new CastExpr(Type.INT, floatLiteral);
+        BinaryPredicate castPredicate = new BinaryPredicate(Operator.EQ, castExpr, new IntLiteral(3));
         List<Expr> notPushDownList = new ArrayList<>();
-        Assertions.assertNull(EsUtil.toEsDsl(castPredicate, notPushDownList));
+        Map<String, String> fieldsContext = new HashMap<>();
+        Assertions.assertNull(EsUtil.toEsDsl(castPredicate, notPushDownList, fieldsContext));
         Assertions.assertEquals(1, notPushDownList.size());
 
         SlotRef k2 = new SlotRef(null, "k2");
@@ -269,7 +279,15 @@ public class EsUtilTest extends EsTestCase {
         BinaryPredicate eqPredicate = new BinaryPredicate(Operator.EQ, k2, intLiteral);
         CompoundPredicate compoundPredicate = new CompoundPredicate(CompoundPredicate.Operator.OR, castPredicate,
                 eqPredicate);
-        EsUtil.toEsDsl(compoundPredicate, notPushDownList);
+        EsUtil.toEsDsl(compoundPredicate, notPushDownList, fieldsContext);
+        Assertions.assertEquals(3, notPushDownList.size());
+
+        SlotRef k3 = new SlotRef(null, "k3");
+        k3.setType(Type.FLOAT);
+        CastExpr castDoubleExpr = new CastExpr(Type.DOUBLE, k3);
+        BinaryPredicate castDoublePredicate = new BinaryPredicate(Operator.GE, castDoubleExpr,
+                new FloatLiteral(3.0, Type.DOUBLE));
+        EsUtil.toEsDsl(castDoublePredicate, notPushDownList, fieldsContext);
         Assertions.assertEquals(3, notPushDownList.size());
     }
 

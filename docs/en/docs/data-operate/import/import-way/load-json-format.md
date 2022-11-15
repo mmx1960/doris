@@ -92,6 +92,12 @@ Currently only the following two Json formats are supported:
    
    This method must be used with the setting `read_json_by_line=true`, the special delimiter also needs to specify the `line_delimiter` parameter, the default is `\n`. When Doris parses, it will be separated according to the delimiter, and then parse each line of Object as a line of data.
 
+### streaming_load_json_max_mb parameters
+
+Some data formats, such as JSON, cannot be split. Doris must read all the data into the memory before parsing can begin. Therefore, this value is used to limit the maximum amount of data that can be loaded in a single Stream load.
+
+The default value is 100, The unit is MB, modify this parameter by referring to the [BE configuration](../../../admin-manual/config/be-config.md).
+
 ### fuzzy_parse parameters
 
 In [STREAM LOAD](../../../sql-manual/sql-reference/Data-Manipulation-Statements/Load/STREAM-LOAD.md) `fuzzy_parse` parameter can be added to speed up JSON Data import efficiency.
@@ -275,6 +281,38 @@ The above example will import the value of k1 multiplied by 100. The final impor
 | 100 | 2 |
 +------+------+
 ````
+
+## Json root
+
+Doris supports extracting data specified in Json through Json root.
+
+**Note: Because for Array type data, Doris will expand the array first, and finally process it in a single line according to the Object format. So the examples later in this document are all explained with Json data in a single Object format. **
+
+- do not specify Json root
+
+  If Json root is not specified, Doris will use the column name in the table to find the element in Object by default. An example is as follows:
+
+  The table contains two columns: `id`, `city`
+
+  The Json data is as follows:
+
+  ```json
+  { "id": 123, "name" : { "id" : "321", "city" : "shanghai" }}
+  ```
+
+  Then use `id`, `city` for matching, and get the final data `123` and `null`
+
+- Specify Json root
+
+  When the import data format is json, you can specify the root node of the Json data through json_root. Doris will extract the elements of the root node through json_root for parsing. Default is empty.
+
+  Specify Json root `-H "json_root: $.name"`. The matched elements are:
+
+  ```json
+  { "id" : "321", "city" : "shanghai" }
+  ```
+
+  The element will be treated as new json for subsequent import operations,and get the final data 321 and shanghai
 
 ## NULL and Default values
 
@@ -468,6 +506,48 @@ Import result:
 104 ["zhejiang","guangzhou"] 6
 105 {"order1":["guangzhou"]} 7
 ````
+
+6. Import Array by json
+Since the Rapidjson handles decimal and largeint numbers which will cause precision problems, 
+we suggest you to use json string to import data to `array<decimal>` or `array<largeint>` column.
+
+```json
+{"k1": 39, "k2": ["-818.2173181"]}
+```
+
+```json
+{"k1": 40, "k2": ["10000000000000000000.1111111222222222"]}
+```
+
+```bash
+curl --location-trusted -u root:  -H "max_filter_ration:0.01" -H "format:json" -H "timeout:300" -T test_decimal.json http://localhost:8035/api/example_db/array_test_decimal/_stream_load
+```
+
+Import result:
+MySQL > select * from array_test_decimal;
++------+----------------------------------+
+| k1   | k2                               |
++------+----------------------------------+
+|   39 | [-818.2173181]                   |
+|   40 | [100000000000000000.001111111]   |
++------+----------------------------------+
+
+
+```json
+{"k1": 999, "k2": ["76959836937749932879763573681792701709", "26017042825937891692910431521038521227"]}
+```
+
+```bash
+curl --location-trusted -u root:  -H "max_filter_ration:0.01" -H "format:json" -H "timeout:300" -T test_largeint.json http://localhost:8035/api/example_db/array_test_largeint/_stream_load
+```
+
+Import result:
+MySQL > select * from array_test_largeint;
++------+------------------------------------------------------------------------------------+
+| k1   | k2                                                                                 |
++------+------------------------------------------------------------------------------------+
+|  999 | [76959836937749932879763573681792701709, 26017042825937891692910431521038521227]   |
++------+------------------------------------------------------------------------------------+
 
 ### Routine Load
 

@@ -53,12 +53,17 @@ public:
     }
 
     virtual bool init_from_pb(const RowsetMetaPB& rowset_meta_pb) {
-        _rowset_meta_pb = rowset_meta_pb;
-        if (_rowset_meta_pb.has_tablet_schema()) {
+        if (rowset_meta_pb.has_tablet_schema()) {
             _schema = TabletSchemaCache::instance()->insert(
-                    _rowset_meta_pb.tablet_schema().SerializeAsString());
-            _rowset_meta_pb.clear_tablet_schema();
+                    rowset_meta_pb.tablet_schema().SerializeAsString());
         }
+        // Release ownership of TabletSchemaPB from `rowset_meta_pb` and then set it back to `rowset_meta_pb`,
+        // this won't break const semantics of `rowset_meta_pb`, because `rowset_meta_pb` is not changed
+        // before and after call this method.
+        auto& mut_rowset_meta_pb = const_cast<RowsetMetaPB&>(rowset_meta_pb);
+        auto schema = mut_rowset_meta_pb.release_tablet_schema();
+        _rowset_meta_pb = mut_rowset_meta_pb;
+        mut_rowset_meta_pb.set_allocated_tablet_schema(schema);
         _init();
         return true;
     }
@@ -82,7 +87,7 @@ public:
     }
 
     // This method may return nullptr.
-    io::FileSystem* fs() {
+    io::FileSystemSPtr fs() {
         if (!_fs) {
             if (is_local()) {
                 return io::global_local_filesystem();
@@ -91,10 +96,10 @@ public:
                 LOG_IF(WARNING, !_fs) << "Cannot get file system: " << resource_id();
             }
         }
-        return _fs.get();
+        return _fs;
     }
 
-    void set_fs(io::FileSystemPtr fs) { _fs = std::move(fs); }
+    void set_fs(io::FileSystemSPtr fs) { _fs = std::move(fs); }
 
     const io::ResourceId& resource_id() const { return _rowset_meta_pb.resource_id(); }
 
@@ -233,8 +238,6 @@ public:
 
     bool delete_flag() const { return _rowset_meta_pb.delete_flag(); }
 
-    void set_delete_flag(bool delete_flag) { _rowset_meta_pb.set_delete_flag(delete_flag); }
-
     int64_t creation_time() const { return _rowset_meta_pb.creation_time(); }
 
     void set_creation_time(int64_t creation_time) {
@@ -341,6 +344,7 @@ public:
     int64_t oldest_write_timestamp() const { return _rowset_meta_pb.oldest_write_timestamp(); }
 
     int64_t newest_write_timestamp() const { return _rowset_meta_pb.newest_write_timestamp(); }
+
     void set_tablet_schema(const TabletSchemaSPtr& tablet_schema) {
         DCHECK(_schema == nullptr);
         _schema = TabletSchemaCache::instance()->insert(tablet_schema->to_key());
@@ -395,9 +399,9 @@ private:
 
 private:
     RowsetMetaPB _rowset_meta_pb;
-    std::shared_ptr<TabletSchema> _schema = nullptr;
+    TabletSchemaSPtr _schema = nullptr;
     RowsetId _rowset_id;
-    io::FileSystemPtr _fs;
+    io::FileSystemSPtr _fs;
     bool _is_removed_from_rowset_meta = false;
 };
 

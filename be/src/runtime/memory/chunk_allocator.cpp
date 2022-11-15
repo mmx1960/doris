@@ -34,6 +34,11 @@
 
 namespace doris {
 
+// <= MIN_CHUNK_SIZE, A large number of small chunks will waste extra storage and increase lock time.
+static constexpr size_t MIN_CHUNK_SIZE = 4096; // 4K
+// >= MAX_CHUNK_SIZE, Large chunks may not be used for a long time, wasting memory.
+static constexpr size_t MAX_CHUNK_SIZE = 64 * (1ULL << 20); // 64M
+
 ChunkAllocator* ChunkAllocator::_s_instance = nullptr;
 
 DEFINE_COUNTER_METRIC_PROTOTYPE_2ARG(chunk_pool_local_core_alloc_count, MetricUnit::NOUNIT);
@@ -130,7 +135,8 @@ ChunkAllocator::ChunkAllocator(size_t reserve_limit)
           _steal_arena_limit(reserve_limit * 0.1),
           _reserved_bytes(0),
           _arenas(CpuInfo::get_max_num_cores()) {
-    _mem_tracker = std::make_unique<MemTrackerLimiter>(-1, "ChunkAllocator");
+    _mem_tracker =
+            std::make_unique<MemTrackerLimiter>(MemTrackerLimiter::Type::GLOBAL, "ChunkAllocator");
     for (int i = 0; i < _arenas.size(); ++i) {
         _arenas[i].reset(new ChunkArena());
     }
@@ -199,12 +205,17 @@ Status ChunkAllocator::allocate(size_t size, Chunk* chunk) {
 void ChunkAllocator::free(const Chunk& chunk) {
     DCHECK(chunk.core_id != -1);
     CHECK((chunk.size & (chunk.size - 1)) == 0);
+    if (config::disable_mem_pools) {
+        SystemAllocator::free(chunk.data, chunk.size);
+        return;
+    }
 
     int64_t old_reserved_bytes = _reserved_bytes;
     int64_t new_reserved_bytes = 0;
     do {
         new_reserved_bytes = old_reserved_bytes + chunk.size;
-        if (new_reserved_bytes > _reserve_bytes_limit) {
+        if (chunk.size <= MIN_CHUNK_SIZE || chunk.size >= MAX_CHUNK_SIZE ||
+            new_reserved_bytes > _reserve_bytes_limit) {
             int64_t cost_ns = 0;
             {
                 SCOPED_RAW_TIMER(&cost_ns);

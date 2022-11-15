@@ -17,89 +17,70 @@
 
 package org.apache.doris.nereids.rules.exploration.join;
 
-import org.apache.doris.nereids.annotation.Developing;
 import org.apache.doris.nereids.rules.Rule;
 import org.apache.doris.nereids.rules.RuleType;
 import org.apache.doris.nereids.rules.exploration.OneExplorationRuleFactory;
+import org.apache.doris.nereids.trees.expressions.Slot;
+import org.apache.doris.nereids.trees.plans.GroupPlan;
 import org.apache.doris.nereids.trees.plans.logical.LogicalJoin;
-import org.apache.doris.nereids.trees.plans.logical.LogicalProject;
+
+import java.util.List;
 
 /**
- * rule factory for exchange inner join's children.
+ * Join Commute
  */
-@Developing
 public class JoinCommute extends OneExplorationRuleFactory {
 
-    public static final JoinCommute SWAP_OUTER_COMMUTE_BOTTOM_JOIN = new JoinCommute(true, SwapType.BOTTOM_JOIN);
+    public static final JoinCommute LEFT_DEEP = new JoinCommute(SwapType.LEFT_DEEP);
+    public static final JoinCommute ZIG_ZAG = new JoinCommute(SwapType.ZIG_ZAG);
+    public static final JoinCommute BUSHY = new JoinCommute(SwapType.BUSHY);
 
     private final SwapType swapType;
-    private final boolean swapOuter;
 
-    public JoinCommute(boolean swapOuter) {
-        this.swapOuter = swapOuter;
-        this.swapType = SwapType.ALL;
-    }
-
-    public JoinCommute(boolean swapOuter, SwapType swapType) {
-        this.swapOuter = swapOuter;
+    public JoinCommute(SwapType swapType) {
         this.swapType = swapType;
-    }
-
-    enum SwapType {
-        BOTTOM_JOIN, ZIG_ZAG, ALL
     }
 
     @Override
     public Rule build() {
-        return innerLogicalJoin(any(), any()).then(join -> {
-            if (!check(join)) {
-                return null;
-            }
-            boolean isBottomJoin = isBottomJoin(join);
-            if (swapType == SwapType.BOTTOM_JOIN && !isBottomJoin) {
-                return null;
-            }
+        return logicalJoin()
+                .when(join -> check(swapType, join))
+                .then(join -> {
+                    LogicalJoin<GroupPlan, GroupPlan> newJoin = new LogicalJoin<>(
+                            join.getJoinType().swap(),
+                            join.getHashJoinConjuncts(),
+                            join.getOtherJoinConjuncts(),
+                            join.right(), join.left(),
+                            join.getJoinReorderContext());
+                    newJoin.getJoinReorderContext().setHasCommute(true);
+                    if (swapType == SwapType.ZIG_ZAG && isNotBottomJoin(join)) {
+                        newJoin.getJoinReorderContext().setHasCommuteZigZag(true);
+                    }
 
-            LogicalJoin newJoin = new LogicalJoin(
-                    join.getJoinType(),
-                    join.getCondition(),
-                    join.right(), join.left(),
-                    join.getJoinReorderContext()
-            );
-            newJoin.getJoinReorderContext().setHasCommute(true);
-            if (swapType == SwapType.ZIG_ZAG && !isBottomJoin) {
-                newJoin.getJoinReorderContext().setHasCommuteZigZag(true);
-            }
-
-            return newJoin;
-        }).toRule(RuleType.LOGICAL_JOIN_COMMUTATIVE);
+                    return newJoin;
+                }).toRule(RuleType.LOGICAL_JOIN_COMMUTATE);
     }
 
-
-    private boolean check(LogicalJoin join) {
-        if (join.getJoinReorderContext().hasCommute() || join.getJoinReorderContext().hasExchange()) {
-            return false;
-        }
-        return true;
+    enum SwapType {
+        LEFT_DEEP, ZIG_ZAG, BUSHY
     }
 
-    private boolean isBottomJoin(LogicalJoin join) {
-        // TODO: wait for tree model of pattern-match.
-        if (join.left() instanceof LogicalProject) {
-            LogicalProject project = (LogicalProject) join.left();
-            if (project.child() instanceof LogicalJoin) {
-                return false;
-            }
-        }
-        if (join.right() instanceof LogicalProject) {
-            LogicalProject project = (LogicalProject) join.left();
-            if (project.child() instanceof LogicalJoin) {
-                return false;
-            }
-        }
-        if (join.left() instanceof LogicalJoin || join.right() instanceof LogicalJoin) {
+    public static boolean check(SwapType swapType, LogicalJoin<GroupPlan, GroupPlan> join) {
+        if (swapType == SwapType.LEFT_DEEP && isNotBottomJoin(join)) {
             return false;
         }
-        return true;
+
+        return !join.getJoinReorderContext().hasCommute() && !join.getJoinReorderContext().hasExchange();
+    }
+
+    public static boolean isNotBottomJoin(LogicalJoin<GroupPlan, GroupPlan> join) {
+        // TODO: tmp way to judge bottomJoin
+        return containJoin(join.left()) || containJoin(join.right());
+    }
+
+    private static boolean containJoin(GroupPlan groupPlan) {
+        // TODO: tmp way to judge containJoin
+        List<Slot> output = groupPlan.getOutput();
+        return !output.stream().map(Slot::getQualifier).allMatch(output.get(0).getQualifier()::equals);
     }
 }

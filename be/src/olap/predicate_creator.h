@@ -19,12 +19,19 @@
 
 #include <charconv>
 
+#include "exprs/bloomfilter_predicate.h"
+#include "exprs/create_predicate_function.h"
+#include "exprs/hybrid_set.h"
+#include "olap/bloom_filter_predicate.h"
 #include "olap/column_predicate.h"
 #include "olap/comparison_predicate.h"
 #include "olap/in_list_predicate.h"
-#include "olap/olap_cond.h"
+#include "olap/null_predicate.h"
 #include "olap/tablet_schema.h"
+#include "runtime/define_primitive_type.h"
+#include "runtime/primitive_type.h"
 #include "util/date_func.h"
+#include "util/string_util.h"
 
 namespace doris {
 
@@ -44,11 +51,7 @@ public:
     ColumnPredicate* create(const TabletColumn& column, int index, const ConditionType& conditions,
                             bool opposite, MemPool* pool) override {
         if constexpr (PredicateTypeTraits::is_list(PT)) {
-            phmap::flat_hash_set<CppType> values;
-            for (const auto& condition : conditions) {
-                values.insert(convert(condition));
-            }
-            return new InListPredicateBase<Type, PT>(index, std::move(values), opposite);
+            return new InListPredicateBase<Type, PT>(index, conditions, convert, opposite);
         } else {
             static_assert(PredicateTypeTraits::is_comparison(PT));
             return new ComparisonPredicateBase<Type, PT>(index, convert(conditions), opposite);
@@ -56,7 +59,7 @@ public:
     }
 
 private:
-    CppType convert(const std::string& condition) {
+    static CppType convert(const std::string& condition) {
         CppType value = 0;
         std::from_chars(condition.data(), condition.data() + condition.size(), value);
         return value;
@@ -70,11 +73,7 @@ public:
     ColumnPredicate* create(const TabletColumn& column, int index, const ConditionType& conditions,
                             bool opposite, MemPool* pool) override {
         if constexpr (PredicateTypeTraits::is_list(PT)) {
-            phmap::flat_hash_set<CppType> values;
-            for (const auto& condition : conditions) {
-                values.insert(convert(column, condition));
-            }
-            return new InListPredicateBase<Type, PT>(index, std::move(values), opposite);
+            return new InListPredicateBase<Type, PT>(index, conditions, convert, opposite, &column);
         } else {
             static_assert(PredicateTypeTraits::is_comparison(PT));
             return new ComparisonPredicateBase<Type, PT>(index, convert(column, conditions),
@@ -83,7 +82,7 @@ public:
     }
 
 private:
-    CppType convert(const TabletColumn& column, const std::string& condition) {
+    static CppType convert(const TabletColumn& column, const std::string& condition) {
         StringParser::ParseResult result = StringParser::ParseResult::PARSE_SUCCESS;
         // return CppType value cast from int128_t
         return StringParser::string_to_decimal<int128_t>(
@@ -94,16 +93,11 @@ private:
 template <PrimitiveType Type, PredicateType PT, typename ConditionType>
 class StringPredicateCreator : public PredicateCreator<ConditionType> {
 public:
-    StringPredicateCreator(bool should_padding) : _should_padding(should_padding) {};
-
     ColumnPredicate* create(const TabletColumn& column, int index, const ConditionType& conditions,
                             bool opposite, MemPool* pool) override {
         if constexpr (PredicateTypeTraits::is_list(PT)) {
-            phmap::flat_hash_set<StringValue> values;
-            for (const auto& condition : conditions) {
-                values.insert(convert(column, condition, pool));
-            }
-            return new InListPredicateBase<Type, PT>(index, std::move(values), opposite);
+            return new InListPredicateBase<Type, PT>(index, conditions, convert, opposite, &column,
+                                                     pool);
         } else {
             static_assert(PredicateTypeTraits::is_comparison(PT));
             return new ComparisonPredicateBase<Type, PT>(index, convert(column, conditions, pool),
@@ -112,10 +106,10 @@ public:
     }
 
 private:
-    bool _should_padding;
-    StringValue convert(const TabletColumn& column, const std::string& condition, MemPool* pool) {
+    static StringValue convert(const TabletColumn& column, const std::string& condition,
+                               MemPool* pool) {
         size_t length = condition.length();
-        if (_should_padding) {
+        if constexpr (Type == TYPE_CHAR) {
             length = std::max(static_cast<size_t>(column.length()), length);
         }
 
@@ -137,11 +131,7 @@ public:
     ColumnPredicate* create(const TabletColumn& column, int index, const ConditionType& conditions,
                             bool opposite, MemPool* pool) override {
         if constexpr (PredicateTypeTraits::is_list(PT)) {
-            phmap::flat_hash_set<CppType> values;
-            for (const auto& condition : conditions) {
-                values.insert(_convert(condition));
-            }
-            return new InListPredicateBase<Type, PT>(index, std::move(values), opposite);
+            return new InListPredicateBase<Type, PT>(index, conditions, _convert, opposite);
         } else {
             static_assert(PredicateTypeTraits::is_comparison(PT));
             return new ComparisonPredicateBase<Type, PT>(index, _convert(conditions), opposite);
@@ -188,11 +178,11 @@ inline std::unique_ptr<PredicateCreator<ConditionType>> get_creator(const FieldT
         return std::make_unique<DecimalPredicateCreator<TYPE_DECIMAL128, PT, ConditionType>>();
     }
     case OLAP_FIELD_TYPE_CHAR: {
-        return std::make_unique<StringPredicateCreator<TYPE_CHAR, PT, ConditionType>>(true);
+        return std::make_unique<StringPredicateCreator<TYPE_CHAR, PT, ConditionType>>();
     }
     case OLAP_FIELD_TYPE_VARCHAR:
     case OLAP_FIELD_TYPE_STRING: {
-        return std::make_unique<StringPredicateCreator<TYPE_STRING, PT, ConditionType>>(false);
+        return std::make_unique<StringPredicateCreator<TYPE_STRING, PT, ConditionType>>();
     }
     case OLAP_FIELD_TYPE_DATE: {
         return std::make_unique<CustomPredicateCreator<TYPE_DATE, PT, ConditionType>>(
@@ -251,13 +241,116 @@ template <PredicateType PT>
 inline ColumnPredicate* create_list_predicate(const TabletColumn& column, int index,
                                               const std::vector<std::string>& conditions,
                                               bool opposite, MemPool* pool) {
-    if (column.type() == OLAP_FIELD_TYPE_BOOL) {
-        LOG(FATAL) << "Failed to create list preacate! input column type is invalid";
-        return nullptr;
-    }
     static_assert(PredicateTypeTraits::is_list(PT));
     return create_predicate<PT, std::vector<std::string>>(column, index, conditions, opposite,
                                                           pool);
+}
+
+// This method is called in reader and in deletehandler.
+// When it is called by delete handler, then it should use the delete predicate's tablet schema
+// to parse the conditions.
+inline ColumnPredicate* parse_to_predicate(TabletSchemaSPtr tablet_schema,
+                                           const TCondition& condition, MemPool* mem_pool,
+                                           bool opposite = false) {
+    int32_t col_unique_id = condition.column_unique_id;
+    // TODO: not equal and not in predicate is not pushed down
+    const TabletColumn& column = tablet_schema->column_by_uid(col_unique_id);
+    uint32_t index = tablet_schema->field_index(col_unique_id);
+
+    if (to_lower(condition.condition_op) == "is") {
+        return new NullPredicate(index, to_lower(condition.condition_values[0]) == "null",
+                                 opposite);
+    }
+
+    if ((condition.condition_op == "*=" || condition.condition_op == "!*=") &&
+        condition.condition_values.size() > 1) {
+        decltype(create_list_predicate<PredicateType::UNKNOWN>)* create = nullptr;
+
+        if (condition.condition_op == "*=") {
+            create = create_list_predicate<PredicateType::IN_LIST>;
+        } else {
+            create = create_list_predicate<PredicateType::NOT_IN_LIST>;
+        }
+        return create(column, index, condition.condition_values, opposite, mem_pool);
+    }
+
+    decltype(create_comparison_predicate<PredicateType::UNKNOWN>)* create = nullptr;
+    if (condition.condition_op == "*=" || condition.condition_op == "=") {
+        create = create_comparison_predicate<PredicateType::EQ>;
+    } else if (condition.condition_op == "!*=" || condition.condition_op == "!=") {
+        create = create_comparison_predicate<PredicateType::NE>;
+    } else if (condition.condition_op == "<<") {
+        create = create_comparison_predicate<PredicateType::LT>;
+    } else if (condition.condition_op == "<=") {
+        create = create_comparison_predicate<PredicateType::LE>;
+    } else if (condition.condition_op == ">>") {
+        create = create_comparison_predicate<PredicateType::GT>;
+    } else if (condition.condition_op == ">=") {
+        create = create_comparison_predicate<PredicateType::GE>;
+    }
+    return create(column, index, condition.condition_values[0], opposite, mem_pool);
+}
+
+#define APPLY_FOR_PRIMTYPE(M) \
+    M(TYPE_TINYINT)           \
+    M(TYPE_SMALLINT)          \
+    M(TYPE_INT)               \
+    M(TYPE_BIGINT)            \
+    M(TYPE_LARGEINT)          \
+    M(TYPE_FLOAT)             \
+    M(TYPE_DOUBLE)            \
+    M(TYPE_CHAR)              \
+    M(TYPE_DATE)              \
+    M(TYPE_DATETIME)          \
+    M(TYPE_DATEV2)            \
+    M(TYPE_DATETIMEV2)        \
+    M(TYPE_VARCHAR)           \
+    M(TYPE_STRING)            \
+    M(TYPE_DECIMAL32)         \
+    M(TYPE_DECIMAL64)         \
+    M(TYPE_DECIMAL128)
+
+template <PrimitiveType PT>
+inline ColumnPredicate* create_olap_column_predicate(
+        uint32_t column_id, const std::shared_ptr<BloomFilterFuncBase>& filter, int be_exec_version,
+        const TabletColumn* column = nullptr) {
+    std::shared_ptr<BloomFilterFuncBase> filter_olap;
+    filter_olap.reset(create_bloom_filter(PT));
+    filter_olap->light_copy(filter.get());
+    return new BloomFilterColumnPredicate<PT>(column_id, filter, be_exec_version);
+}
+
+template <PrimitiveType PT>
+inline ColumnPredicate* create_olap_column_predicate(uint32_t column_id,
+                                                     const std::shared_ptr<HybridSetBase>& filter,
+                                                     int be_exec_version,
+                                                     const TabletColumn* column = nullptr) {
+    return new InListPredicateBase<PT, PredicateType::IN_LIST>(column_id, filter, column->length());
+}
+
+template <typename T>
+inline ColumnPredicate* create_column_predicate(uint32_t column_id,
+                                                const std::shared_ptr<T>& filter, FieldType type,
+                                                int be_exec_version,
+                                                const TabletColumn* column = nullptr) {
+    switch (type) {
+#define M(NAME)                                                                                \
+    case OLAP_FIELD_##NAME: {                                                                  \
+        return create_olap_column_predicate<NAME>(column_id, filter, be_exec_version, column); \
+    }
+        APPLY_FOR_PRIMTYPE(M)
+#undef M
+    case OLAP_FIELD_TYPE_DECIMAL: {
+        return create_olap_column_predicate<TYPE_DECIMALV2>(column_id, filter, be_exec_version,
+                                                            column);
+    }
+    case OLAP_FIELD_TYPE_BOOL: {
+        return create_olap_column_predicate<TYPE_BOOLEAN>(column_id, filter, be_exec_version,
+                                                          column);
+    }
+    default:
+        return nullptr;
+    }
 }
 
 } //namespace doris

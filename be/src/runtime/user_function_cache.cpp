@@ -18,20 +18,19 @@
 #include "runtime/user_function_cache.h"
 
 #include <atomic>
-#include <boost/algorithm/string/predicate.hpp> // boost::algorithm::ends_with
 #include <regex>
 #include <vector>
 
+#include "common/config.h"
 #include "env/env.h"
 #include "gutil/strings/split.h"
 #include "http/http_client.h"
 #include "util/dynamic_util.h"
 #include "util/file_utils.h"
-#ifdef LIBJVM
 #include "util/jni-util.h"
-#endif
 #include "util/md5.h"
 #include "util/spinlock.h"
+#include "util/string_util.h"
 
 namespace doris {
 
@@ -97,7 +96,7 @@ UserFunctionCacheEntry::~UserFunctionCacheEntry() {
     }
 }
 
-UserFunctionCache::UserFunctionCache() {}
+UserFunctionCache::UserFunctionCache() = default;
 
 UserFunctionCache::~UserFunctionCache() {
     std::lock_guard<std::mutex> l(_cache_lock);
@@ -130,8 +129,13 @@ Status UserFunctionCache::init(const std::string& lib_dir) {
 }
 
 Status UserFunctionCache::_load_entry_from_lib(const std::string& dir, const std::string& file) {
-    if (!boost::algorithm::ends_with(file, ".so")) {
-        return Status::InternalError("unknown library file format");
+    LibType lib_type;
+    if (ends_with(file, ".so")) {
+        lib_type = LibType::SO;
+    } else if (ends_with(file, ".jar")) {
+        lib_type = LibType::JAR;
+    } else {
+        return Status::InternalError("unknown library file format: " + file);
     }
 
     std::vector<std::string> split_parts = strings::Split(file, ".");
@@ -149,7 +153,7 @@ Status UserFunctionCache::_load_entry_from_lib(const std::string& dir, const std
     }
     // create a cache entry and put it into entry map
     UserFunctionCacheEntry* entry =
-            new UserFunctionCacheEntry(function_id, checksum, dir + "/" + file, LibType::SO);
+            new UserFunctionCacheEntry(function_id, checksum, dir + "/" + file, lib_type);
     entry->is_downloaded = true;
 
     entry->ref();
@@ -255,7 +259,6 @@ Status UserFunctionCache::_get_cache_entry(int64_t fid, const std::string& url,
         } else {
             entry = new UserFunctionCacheEntry(fid, checksum, _make_lib_file(fid, checksum, type),
                                                type);
-
             entry->ref();
             _entry_map.emplace(fid, entry);
         }
@@ -343,7 +346,7 @@ Status UserFunctionCache::_download_lib(const std::string& url, UserFunctionCach
     RETURN_IF_ERROR(client.execute(download_cb));
     RETURN_IF_ERROR(status);
     digest.digest();
-    if (!boost::iequals(digest.hex(), entry->checksum)) {
+    if (!iequal(digest.hex(), entry->checksum)) {
         LOG(WARNING) << "UDF's checksum is not equal, one=" << digest.hex()
                      << ", other=" << entry->checksum;
         return Status::InternalError("UDF's library checksum is not match");
@@ -373,27 +376,30 @@ Status UserFunctionCache::_load_cache_entry_internal(UserFunctionCacheEntry* ent
 }
 
 Status UserFunctionCache::_add_to_classpath(UserFunctionCacheEntry* entry) {
-#ifdef LIBJVM
-    const std::string path = "file://" + entry->lib_file;
-    LOG(INFO) << "Add jar " << path << " to classpath";
-    JNIEnv* env;
-    RETURN_IF_ERROR(JniUtil::GetJNIEnv(&env));
-    jclass class_class_loader = env->FindClass("java/lang/ClassLoader");
-    jmethodID method_get_system_class_loader = env->GetStaticMethodID(
-            class_class_loader, "getSystemClassLoader", "()Ljava/lang/ClassLoader;");
-    jobject class_loader =
-            env->CallStaticObjectMethod(class_class_loader, method_get_system_class_loader);
-    jclass class_url_class_loader = env->FindClass("java/net/URLClassLoader");
-    jmethodID method_add_url =
-            env->GetMethodID(class_url_class_loader, "addURL", "(Ljava/net/URL;)V");
-    jclass class_url = env->FindClass("java/net/URL");
-    jmethodID url_ctor = env->GetMethodID(class_url, "<init>", "(Ljava/lang/String;)V");
-    jobject urlInstance = env->NewObject(class_url, url_ctor, env->NewStringUTF(path.c_str()));
-    env->CallVoidMethod(class_loader, method_add_url, urlInstance);
-    return Status::OK();
-#else
-    return Status::InternalError("No libjvm is found!");
-#endif
+    if (config::enable_java_support) {
+        const std::string path = "file://" + entry->lib_file;
+        LOG(INFO) << "Add jar " << path << " to classpath";
+        JNIEnv* env;
+        RETURN_IF_ERROR(JniUtil::GetJNIEnv(&env));
+        jclass class_class_loader = env->FindClass("java/lang/ClassLoader");
+        jmethodID method_get_system_class_loader = env->GetStaticMethodID(
+                class_class_loader, "getSystemClassLoader", "()Ljava/lang/ClassLoader;");
+        jobject class_loader =
+                env->CallStaticObjectMethod(class_class_loader, method_get_system_class_loader);
+        jclass class_url_class_loader = env->FindClass("java/net/URLClassLoader");
+        jmethodID method_add_url =
+                env->GetMethodID(class_url_class_loader, "addURL", "(Ljava/net/URL;)V");
+        jclass class_url = env->FindClass("java/net/URL");
+        jmethodID url_ctor = env->GetMethodID(class_url, "<init>", "(Ljava/lang/String;)V");
+        jobject urlInstance = env->NewObject(class_url, url_ctor, env->NewStringUTF(path.c_str()));
+        env->CallVoidMethod(class_loader, method_add_url, urlInstance);
+        entry->is_loaded.store(true);
+        return Status::OK();
+    } else {
+        return Status::InternalError(
+                "Java UDF is not enabled, you can change be config enable_java_support to true and "
+                "restart be.");
+    }
 }
 
 std::string UserFunctionCache::_make_lib_file(int64_t function_id, const std::string& checksum,

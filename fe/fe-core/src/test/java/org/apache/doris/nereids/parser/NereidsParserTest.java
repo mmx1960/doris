@@ -19,12 +19,17 @@ package org.apache.doris.nereids.parser;
 
 import org.apache.doris.analysis.ExplainOptions;
 import org.apache.doris.analysis.StatementBase;
+import org.apache.doris.common.Pair;
+import org.apache.doris.nereids.StatementContext;
 import org.apache.doris.nereids.exceptions.ParseException;
 import org.apache.doris.nereids.glue.LogicalPlanAdapter;
+import org.apache.doris.nereids.trees.expressions.literal.DecimalLiteral;
 import org.apache.doris.nereids.trees.plans.JoinType;
 import org.apache.doris.nereids.trees.plans.Plan;
+import org.apache.doris.nereids.trees.plans.PlanType;
 import org.apache.doris.nereids.trees.plans.commands.ExplainCommand;
 import org.apache.doris.nereids.trees.plans.commands.ExplainCommand.ExplainLevel;
+import org.apache.doris.nereids.trees.plans.logical.LogicalCTE;
 import org.apache.doris.nereids.trees.plans.logical.LogicalJoin;
 import org.apache.doris.nereids.trees.plans.logical.LogicalPlan;
 import org.apache.doris.nereids.trees.plans.logical.LogicalProject;
@@ -33,14 +38,16 @@ import org.junit.jupiter.api.Assertions;
 import org.junit.jupiter.api.Test;
 
 import java.util.List;
+import java.util.Optional;
+import java.util.Set;
 
-public class NereidsParserTest {
+public class NereidsParserTest extends ParserTestBase {
 
     @Test
     public void testParseMultiple() {
         NereidsParser nereidsParser = new NereidsParser();
         String sql = "SELECT b FROM test;SELECT a FROM test;";
-        List<LogicalPlan> logicalPlanList = nereidsParser.parseMultiple(sql);
+        List<Pair<LogicalPlan, StatementContext>> logicalPlanList = nereidsParser.parseMultiple(sql);
         Assertions.assertEquals(2, logicalPlanList.size());
     }
 
@@ -60,22 +67,40 @@ public class NereidsParserTest {
 
     @Test
     public void testErrorListener() {
-        Exception exception = Assertions.assertThrows(ParseException.class, () -> {
-            String sql = "select * from t1 where a = 1 illegal_symbol";
-            NereidsParser nereidsParser = new NereidsParser();
-            nereidsParser.parseSingle(sql);
-        });
-        Assertions.assertEquals("\nextraneous input 'illegal_symbol' expecting {<EOF>, ';'}(line 1, pos29)\n",
-                exception.getMessage());
+        parsePlan("select * from t1 where a = 1 illegal_symbol")
+                .assertThrowsExactly(ParseException.class)
+                .assertMessageEquals("\nextraneous input 'illegal_symbol' expecting {<EOF>, ';'}(line 1, pos 29)\n");
     }
 
     @Test
     public void testPostProcessor() {
-        String sql = "select `AD``D` from t1 where a = 1";
+        parsePlan("select `AD``D` from t1 where a = 1")
+                .matchesFromRoot(
+                        logicalProject().when(p -> "AD`D".equals(p.getProjects().get(0).getName()))
+                );
+    }
+
+    @Test
+    public void testParseCTE() {
+        // Just for debug; will be completed before merged;
         NereidsParser nereidsParser = new NereidsParser();
-        LogicalPlan logicalPlan = nereidsParser.parseSingle(sql);
-        LogicalProject<Plan> logicalProject = (LogicalProject) logicalPlan;
-        Assertions.assertEquals("AD`D", logicalProject.getProjects().get(0).getName());
+        LogicalPlan logicalPlan;
+        String cteSql1 = "with t1 as (select s_suppkey from supplier where s_suppkey < 10) select * from t1";
+        logicalPlan = nereidsParser.parseSingle(cteSql1);
+        Assertions.assertEquals(PlanType.LOGICAL_CTE, logicalPlan.getType());
+        Assertions.assertEquals(((LogicalCTE<?>) logicalPlan).getAliasQueries().size(), 1);
+
+        String cteSql2 = "with t1 as (select s_suppkey from supplier), t2 as (select s_suppkey from t1) select * from t2";
+        logicalPlan = nereidsParser.parseSingle(cteSql2);
+        Assertions.assertEquals(PlanType.LOGICAL_CTE, logicalPlan.getType());
+        Assertions.assertEquals(((LogicalCTE<?>) logicalPlan).getAliasQueries().size(), 2);
+
+        String cteSql3 = "with t1 (key, name) as (select s_suppkey, s_name from supplier) select * from t1";
+        logicalPlan = nereidsParser.parseSingle(cteSql3);
+        Assertions.assertEquals(PlanType.LOGICAL_CTE, logicalPlan.getType());
+        Assertions.assertEquals(((LogicalCTE<?>) logicalPlan).getAliasQueries().size(), 1);
+        Optional<List<String>> columnAliases = ((LogicalCTE<?>) logicalPlan).getAliasQueries().get(0).getColumnAliases();
+        Assertions.assertEquals(columnAliases.get().size(), 2);
     }
 
     @Test
@@ -191,5 +216,18 @@ public class NereidsParserTest {
         logicalPlan = nereidsParser.parseSingle(crossJoin);
         logicalJoin = (LogicalJoin) logicalPlan.child(0);
         Assertions.assertEquals(JoinType.CROSS_JOIN, logicalJoin.getJoinType());
+    }
+
+    @Test
+    public void parseDecimal() {
+        String f1 = "SELECT col1 * 0.267081789095306 FROM t";
+        NereidsParser nereidsParser = new NereidsParser();
+        LogicalPlan logicalPlan = nereidsParser.parseSingle(f1);
+        long doubleCount = logicalPlan
+                .getExpressions()
+                .stream()
+                .mapToLong(e -> e.<Set<DecimalLiteral>>collect(DecimalLiteral.class::isInstance).size())
+                .sum();
+        Assertions.assertEquals(doubleCount, 1);
     }
 }

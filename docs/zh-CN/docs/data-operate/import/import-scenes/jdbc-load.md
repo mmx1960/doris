@@ -1,6 +1,6 @@
 ---
 {
-    "title": "使用JDBC同步数据",
+    "title": "使用 Insert 方式同步数据",
     "language": "zh-CN"
 }
 
@@ -24,9 +24,9 @@ KIND, either express or implied.  See the License for the
 specific language governing permissions and limitations
 under the License.
 -->
-# 使用JDBC同步数据
+# 使用 Insert 方式同步数据
 
-用户可以通过 JDBC 协议，使用 INSERT 语句进行数据导入。
+用户可以通过 MySQL 协议，使用 INSERT 语句进行数据导入。
 
 INSERT 语句的使用方式和 MySQL 等数据库中 INSERT 语句的使用方式类似。 INSERT 语句支持以下两种语法：
 
@@ -35,7 +35,7 @@ INSERT 语句的使用方式和 MySQL 等数据库中 INSERT 语句的使用方�
 * INSERT INTO table VALUES(...)
 ```
 
-这里我们仅介绍第二种方式。关于 INSERT 命令的详细说明，请参阅 [INSERT](../../../sql-manual/sql-reference/Data-Manipulation-Statements/Manipulation/INSERT.md) 命令文档。
+这里我们仅介绍第二种方式。关于 INSERT 命令的详细说明，请参阅 [INSERT](../../../sql-manual/sql-reference/Data-Manipulation-Statements/Manipulation/INSERT) 命令文档。
 
 ## 单次写入
 
@@ -79,7 +79,7 @@ public class DorisJDBCDemo {
     private static final String JDBC_DRIVER = "com.mysql.jdbc.Driver";
     private static final String DB_URL_PATTERN = "jdbc:mysql://%s:%d/%s?rewriteBatchedStatements=true";
     private static final String HOST = "127.0.0.1"; // Leader Node host
-    private static final int PORT = 8030;   // http port of Leader Node
+    private static final int PORT = 9030;   // query_port of Leader Node
     private static final String DB = "demo";
     private static final String TBL = "test_1";
     private static final String USER = "admin";
@@ -160,4 +160,4 @@ public class DorisJDBCDemo {
 
    前面提到，我们建议在使用 INSERT 导入数据时，采用 ”批“ 的方式进行导入，而不是单条插入。
 
-   同时，我们可以为每次 INSERT 操作设置一个 Label。通过 [Label 机制](./load-atomicity.html#label-机制) 可以保证操作的幂等性和原子性，最终做到数据的不丢不重。关于 INSERT 中 Label 的具体用法，可以参阅 [INSERT](../../../sql-manual/sql-reference/Data-Manipulation-Statements/Manipulation/INSERT.md) 文档。
+   同时，我们可以为每次 INSERT 操作设置一个 Label。通过 [Label 机制](../load-atomicity) 可以保证操作的幂等性和原子性，最终做到数据的不丢不重。关于 INSERT 中 Label 的具体用法，可以参阅 [INSERT](../../../sql-manual/sql-reference/Data-Manipulation-Statements/Manipulation/INSERT) 文档。

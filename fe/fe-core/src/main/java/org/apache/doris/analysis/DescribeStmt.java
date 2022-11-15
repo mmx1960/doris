@@ -20,6 +20,7 @@ package org.apache.doris.analysis;
 import org.apache.doris.catalog.Column;
 import org.apache.doris.catalog.DatabaseIf;
 import org.apache.doris.catalog.Env;
+import org.apache.doris.catalog.JdbcTable;
 import org.apache.doris.catalog.MaterializedIndexMeta;
 import org.apache.doris.catalog.MysqlTable;
 import org.apache.doris.catalog.OdbcTable;
@@ -32,8 +33,8 @@ import org.apache.doris.common.ErrorCode;
 import org.apache.doris.common.ErrorReport;
 import org.apache.doris.common.FeConstants;
 import org.apache.doris.common.UserException;
+import org.apache.doris.common.proc.IndexSchemaProcNode;
 import org.apache.doris.common.proc.ProcNodeInterface;
-import org.apache.doris.common.proc.ProcResult;
 import org.apache.doris.common.proc.ProcService;
 import org.apache.doris.common.proc.TableProcDir;
 import org.apache.doris.common.util.Util;
@@ -83,15 +84,23 @@ public class DescribeStmt extends ShowStmt {
     private TableName dbTableName;
     private ProcNodeInterface node;
 
-    List<List<String>> totalRows;
+    List<List<String>> totalRows = new LinkedList<List<String>>();
 
     private boolean isAllTables;
-    private boolean isOlapTable;
+    private boolean isOlapTable = false;
+
+    TableValuedFunctionRef tableValuedFunctionRef;
+    boolean isTableValuedFunction;
 
     public DescribeStmt(TableName dbTableName, boolean isAllTables) {
         this.dbTableName = dbTableName;
-        this.totalRows = new LinkedList<List<String>>();
         this.isAllTables = isAllTables;
+    }
+
+    public DescribeStmt(TableValuedFunctionRef tableValuedFunctionRef) {
+        this.tableValuedFunctionRef = tableValuedFunctionRef;
+        this.isTableValuedFunction = true;
+        this.isAllTables = false;
     }
 
     public boolean isAllTables() {
@@ -100,6 +109,23 @@ public class DescribeStmt extends ShowStmt {
 
     @Override
     public void analyze(Analyzer analyzer) throws UserException {
+        if (!isAllTables && isTableValuedFunction) {
+            List<Column> columns = tableValuedFunctionRef.getTableFunction().getTable().getBaseSchema();
+            for (Column column : columns) {
+                List<String> row = Arrays.asList(
+                        column.getDisplayName(),
+                        column.getOriginType().toString(),
+                        column.isAllowNull() ? "Yes" : "No",
+                        ((Boolean) column.isKey()).toString(),
+                        column.getDefaultValue() == null
+                                ? FeConstants.null_string : column.getDefaultValue(),
+                        "NONE"
+                );
+                totalRows.add(row);
+            }
+            return;
+        }
+
         dbTableName.analyze(analyzer);
 
         if (!Env.getCurrentEnv().getAuth().checkTblPriv(ConnectContext.get(), dbTableName, PrivPredicate.SHOW)) {
@@ -201,6 +227,13 @@ public class DescribeStmt extends ShowStmt {
                             odbcTable.getOdbcDriver(),
                             odbcTable.getOdbcTableTypeName());
                     totalRows.add(row);
+                } else if (table.getType() == TableType.JDBC) {
+                    isOlapTable = false;
+                    JdbcTable jdbcTable = (JdbcTable) table;
+                    List<String> row = Arrays.asList(jdbcTable.getJdbcUrl(), jdbcTable.getJdbcUser(),
+                            jdbcTable.getJdbcPasswd(), jdbcTable.getDriverClass(), jdbcTable.getDriverUrl(),
+                            jdbcTable.getExternalTableName(), jdbcTable.getResourceName(), jdbcTable.getJdbcTypeName());
+                    totalRows.add(row);
                 } else if (table.getType() == TableType.MYSQL) {
                     isOlapTable = false;
                     MysqlTable mysqlTable = (MysqlTable) table;
@@ -233,6 +266,9 @@ public class DescribeStmt extends ShowStmt {
         if (isAllTables) {
             return totalRows;
         } else {
+            if (isTableValuedFunction) {
+                return totalRows;
+            }
             Preconditions.checkNotNull(node);
             return node.fetchResult().getRows();
         }
@@ -242,15 +278,7 @@ public class DescribeStmt extends ShowStmt {
     public ShowResultSetMetaData getMetaData() {
         if (!isAllTables) {
             ShowResultSetMetaData.Builder builder = ShowResultSetMetaData.builder();
-
-            ProcResult result = null;
-            try {
-                result = node.fetchResult();
-            } catch (AnalysisException e) {
-                return builder.build();
-            }
-
-            for (String col : result.getColumnNames()) {
+            for (String col : IndexSchemaProcNode.TITLE_NAMES) {
                 builder.addColumn(new Column(col, ScalarType.createVarchar(30)));
             }
             return builder.build();

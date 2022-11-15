@@ -116,6 +116,7 @@ Notice:
   - DATE is converted to DATETIME (hours, minutes and seconds are automatically filled with zeros, for example: `2019-12-09` <--> `2019-12-09 00:00:00`)
   - Convert FLOAT to DOUBLE
   - INT is converted to DATE (if the INT type data is illegal, the conversion fails, and the original data remains unchanged)
+  - All can be converted to STRING except DATE and DATETIME, but STRING cannot be converted to any other type
 
 5. Reorder the column at the specified index
 
@@ -213,6 +214,12 @@ ALTER TABLE example_db.my_table
 ADD COLUMN v2 INT MAX DEFAULT "0" AFTER k2 TO example_rollup_index,
 ORDER BY (k3,k1,k2,v2,v1) FROM example_rollup_index;
 ```
+
+11. Modify the length of a field in the Key column of the Duplicate key table
+
+```sql
+alter table example_tbl modify column k3 varchar(50) key null comment 'to 50'
+````
 
 ### Keywords
 

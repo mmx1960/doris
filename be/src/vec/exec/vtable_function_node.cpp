@@ -17,8 +17,6 @@
 
 #include "vec/exec/vtable_function_node.h"
 
-#include "exprs/expr.h"
-#include "exprs/expr_context.h"
 #include "exprs/table_function/table_function.h"
 #include "exprs/table_function/table_function_factory.h"
 #include "vec/exprs/vexpr.h"
@@ -59,7 +57,7 @@ Status VTableFunctionNode::prepare(RuntimeState* state) {
     RETURN_IF_ERROR(VExpr::prepare(_vfn_ctxs, state, _row_descriptor));
 
     // get current all output slots
-    for (const auto& tuple_desc : this->row_desc().tuple_descriptors()) {
+    for (const auto& tuple_desc : this->_row_descriptor.tuple_descriptors()) {
         for (const auto& slot_desc : tuple_desc->slots()) {
             _output_slots.push_back(slot_desc);
         }
@@ -109,7 +107,7 @@ Status VTableFunctionNode::get_expanded_block(RuntimeState* state, Block* output
         }
     }
 
-    while (true) {
+    while (columns[_child_slots.size()]->size() < state->batch_size()) {
         RETURN_IF_CANCELLED(state);
         RETURN_IF_ERROR(state->check_query_state("VTableFunctionNode, while getting next batch."));
 
@@ -117,7 +115,7 @@ Status VTableFunctionNode::get_expanded_block(RuntimeState* state, Block* output
         if (_child_block->rows() == 0) {
             while (_child_block->rows() == 0 && !_child_eos) {
                 RETURN_IF_ERROR_AND_CHECK_SPAN(
-                        child(0)->get_next(state, _child_block.get(), &_child_eos),
+                        child(0)->get_next_after_projects(state, _child_block.get(), &_child_eos),
                         child(0)->get_next_span(), _child_eos);
             }
             if (_child_eos && _child_block->rows() == 0) {
@@ -133,7 +131,7 @@ Status VTableFunctionNode::get_expanded_block(RuntimeState* state, Block* output
         }
 
         bool skip_child_row = false;
-        while (true) {
+        while (columns[_child_slots.size()]->size() < state->batch_size()) {
             int idx = _find_last_fn_eos_idx();
             if (idx == 0 || skip_child_row) {
                 // all table functions' results are exhausted, process next child row.
@@ -166,6 +164,10 @@ Status VTableFunctionNode::get_expanded_block(RuntimeState* state, Block* output
 
             // 1. copy data from child_block.
             for (int i = 0; i < _child_slots.size(); i++) {
+                if (!slot_need_copy(i)) {
+                    columns[i]->insert_default();
+                    continue;
+                }
                 auto src_column = _child_block->get_by_position(i).column;
                 columns[i]->insert_from(*src_column, _cur_child_offset);
             }
@@ -183,10 +185,6 @@ Status VTableFunctionNode::get_expanded_block(RuntimeState* state, Block* output
 
             bool tmp = false;
             _fns[_fn_num - 1]->forward(&tmp);
-
-            if (columns[_child_slots.size()]->size() >= state->batch_size()) {
-                break;
-            }
         }
     }
 

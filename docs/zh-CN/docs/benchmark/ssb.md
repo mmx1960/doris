@@ -26,13 +26,13 @@ under the License.
 
 # Star Schema Benchmark
 
-[Star Schema Benchmark(SSB)](https://www.cs.umb.edu/~poneil/StarSchemaB.PDF) 是一个轻量级的数仓场景下的性能测试集。SSB基于 [TPC-H](http://www.tpc.org/tpch/) 提供了一个简化版的星型模型数据集，主要用于测试在星型模型下，多表关联查询的性能表现。另外，业界内通常也会将SSB打平为宽表模型（以下简称：SSB flat），来测试查询引擎的性能，参考[Clickhouse](https://clickhouse.com/docs/zh/getting-started/example-datasets/star-schema)。
+[Star Schema Benchmark(SSB)](https://www.cs.umb.edu/~poneil/StarSchemaB.PDF) 是一个轻量级的数仓场景下的性能测试集。SSB 基于 [TPC-H](http://www.tpc.org/tpch/) 提供了一个简化版的星型模型数据集，主要用于测试在星型模型下，多表关联查询的性能表现。另外，业界内通常也会将 SSB 打平为宽表模型（以下简称：SSB flat），来测试查询引擎的性能，参考[Clickhouse](https://clickhouse.com/docs/zh/getting-started/example-datasets/star-schema)。
 
 本文档主要介绍 Doris 在 SSB 测试集上的性能表现。
 
-> 注1：包括 SSB 在内的标准测试集通常和实际业务场景差距较大，并且部分测试会针对测试集进行参数调优。所以标准测试集的测试结果仅能反映数据库在特定场景下的性能表现。建议用户使用实际业务数据进行进一步的测试。
+> 注 1：包括 SSB 在内的标准测试集通常和实际业务场景差距较大，并且部分测试会针对测试集进行参数调优。所以标准测试集的测试结果仅能反映数据库在特定场景下的性能表现。建议用户使用实际业务数据进行进一步的测试。
 >
-> 注2：本文档涉及的操作都在 Ubuntu Server 20.04 环境进行，CentOS 7 也可测试。
+> 注 2：本文档涉及的操作都在 Ubuntu Server 20.04 环境进行，CentOS 7 也可测试。
 
 在 SSB 标准测试数据集上的 13 个查询上，我们对即将发布的 Doris 1.1 版本和 Doris 0.15.0 RC04 版本进行了对别测试，整体性能提升了 2-3 倍。
 
@@ -49,9 +49,9 @@ under the License.
 
 ## 2. 软件环境
 
-- Doris部署 3BE 1FE；
+- Doris 部署 3BE 1FE；
 - 内核版本：Linux version 5.4.0-96-generic (buildd@lgw01-amd64-051)
-- 操作系统版本：Ubuntu Server 20.04 LTS 64位
+- 操作系统版本：Ubuntu Server 20.04 LTS 64 位
 - Doris 软件版本：Apache Doris 1.1 、Apache Doris 0.15.0 RC04
 - JDK：openjdk version "11.0.14" 2022-01-18
 
@@ -68,7 +68,7 @@ under the License.
 
 ## 4. 测试结果
 
-这里我们使用即将发布的 Doris-1.1版本和 Doris-0.15.0 RC04 版本进行对比测试，测试结果如下：
+这里我们使用即将发布的 Doris-1.1 版本和 Doris-0.15.0 RC04 版本进行对比测试，测试结果如下：
 
 | Query | Doris-1.1(ms) | Doris-0.15.0 RC04(ms) |
 | ----- | ------------- | --------------------- |
@@ -88,16 +88,16 @@ under the License.
 
 **结果说明**
 
-- 测试结果对应的数据集为scale 100, 约6亿条。
-- 测试环境配置为用户常用配置，云服务器4台，16核 64G SSD，1 FE 3 BE 部署。
+- 测试结果对应的数据集为 scale 100, 约 6 亿条。
+- 测试环境配置为用户常用配置，云服务器 4 台，16 核 64G SSD，1 FE 3 BE 部署。
 - 选用用户常见配置测试以降低用户选型评估成本，但整个测试过程中不会消耗如此多的硬件资源。
-- 测试结果为3次执行取平均值。并且数据经过充分的 compaction（如果在刚导入数据后立刻测试，则查询延迟可能高于本测试结果，compaction的速度正在持续优化中，未来会显著降低）。
+- 测试结果为 3 次执行取平均值。并且数据经过充分的 compaction（如果在刚导入数据后立刻测试，则查询延迟可能高于本测试结果，compaction 的速度正在持续优化中，未来会显著降低）。
 
 ## 5. 环境准备
 
 请先参照 [官方文档](../install/install-deploy.md) 进行 Doris 的安装部署，以获得一个正常运行中的 Doris 集群（至少包含 1 FE 1 BE，推荐 1 FE 3 BE）。
 
-可修改 BE 的配置文件 be.conf 添加以下配置项，重启BE，以获得更好的查询性能。
+可修改 BE 的配置文件 be.conf 添加以下配置项，重启 BE，以获得更好的查询性能。
 
 ```shell
 enable_storage_vectorization=true
@@ -117,30 +117,30 @@ enable_low_cardinality_optimize=true
 执行以下脚本下载并编译 [ssb-dbgen](https://github.com/electrum/ssb-dbgen.git) 工具。
 
 ```shell
-sh build-ssb-dbgen.sh
+bash bin/build-ssb-dbgen.sh
 ```
 
-安装成功后，将在 `ssb-dbgen/` 目录下生成 `dbgen` 二进制文件。
+安装成功后，将在 `bin/ssb-dbgen/` 目录下生成 `dbgen` 二进制文件。
 
 ### 6.2 生成 SSB 测试集
 
 执行以下脚本生成 SSB 数据集：
 
 ```shell
-sh gen-ssb-data.sh -s 100 -c 100
+bash bin/gen-ssb-data.sh
 ```
 
-> 注1：通过 `sh gen-ssb-data.sh -h` 查看脚本帮助。
+> 注 1：通过 `bash bin/gen-ssb-data.sh -h` 查看脚本帮助，默认 scale factor 为 100（简称 sf100），默认生成 10 个数据文件，即 `bash bin/gen-ssb-data.sh -s 100 -c 10`，耗时数分钟。
 >
-> 注2：数据会以 `.tbl` 为后缀生成在  `ssb-data/` 目录下。文件总大小约60GB。生成时间可能在数分钟到1小时不等。
+> 注 2：数据会以 `.tbl` 为后缀生成在 `bin/ssb-data/` 目录下。文件总大小约 60GB。生成时间可能在数分钟到 1 小时不等，生成完成后会列出生成文件的信息。
 >
-> 注3：`-s 100` 表示测试集大小系数为 100，`-c 100` 表示并发100个线程生成 lineorder 表的数据。`-c` 参数也决定了最终 lineorder 表的文件数量。参数越大，文件数越多，每个文件越小。
+> 注 3：`-s 100` 表示测试集大小系数为 100，`-c 10` 表示并发 10 个线程生成 lineorder 表的数据。`-c` 参数也决定了最终 lineorder 表的文件数量。参数越大，文件数越多，每个文件越小。测试 sf100 用默认参数即可，测试 sf1000 用 `-s 1000 -c 100` 。
 
 在 `-s 100` 参数下，生成的数据集大小为：
 
 | Table     | Rows             | Size | File Number |
 | --------- | ---------------- | ---- | ----------- |
-| lineorder | 6亿（600037902） | 60GB | 100         |
+| lineorder | 6亿（600037902） | 60GB | 10          |
 | customer  | 300万（3000000） | 277M | 1           |
 | part      | 140万（1400000） | 116M | 1           |
 | supplier  | 20万（200000）   | 17M  | 1           |
@@ -148,38 +148,31 @@ sh gen-ssb-data.sh -s 100 -c 100
 
 ### 6.3 建表
 
-#### 6.3.1 准备 `doris-cluster.conf` 文件。
+#### 6.3.1 准备 `conf/doris-cluster.conf` 文件。
 
-在调用导入脚本前，需要将 FE 的 ip 端口等信息写在 `doris-cluster.conf` 文件中。
+在调用导入脚本前，需要将 FE 的 ip 端口等信息写在 `conf/doris-cluster.conf` 文件中。
 
-文件位置和 `load-ssb-dimension-data.sh` 平级。
-
-文件内容包括 FE 的 ip，HTTP 端口，用户名，密码以及待导入数据的 DB 名称：
+文件内容包括 FE 的 ip，HTTP 端口，用户名，密码（默认为空）以及待导入数据的 DB 名称：
 
 ```shell
-export FE_HOST="xxx"
+export FE_HOST="127.0.0.1"
 export FE_HTTP_PORT="8030"
 export FE_QUERY_PORT="9030"
 export USER="root"
-export PASSWORD='xxx'
+export PASSWORD=""
 export DB="ssb"
 ```
 
 #### 6.3.2 执行以下脚本生成创建 SSB 表：
 
 ```shell
-sh create-ssb-tables.sh
+bash bin/create-ssb-tables.sh
 ```
-或者复制 [create-ssb-tables.sql](https://github.com/apache/incubator-doris/tree/master/tools/ssb-tools/ddl/create-ssb-tables.sql) 中的建表语句，在 Doris 中执行。
 
-#### 6.3.3 执行以下脚本生成创建 SSB flat 表：
+或者复制 [create-ssb-tables.sql](https://github.com/apache/doris/tree/master/tools/ssb-tools/ddl/create-ssb-tables.sql) 中的建表语句，在 Doris 中执行。
+复制 [create-ssb-flat-table.sql](https://github.com/apache/doris/tree/master/tools/ssb-tools/ddl/create-ssb-flat-table.sql) 中的建表语句，在 Doris 中执行。
 
-```shell
-sh create-ssb-flat-table.sh
-```
-或者复制 [create-ssb-flat-table.sql](https://github.com/apache/incubator-doris/tree/master/tools/ssb-tools/ddl/create-ssb-flat-table.sql) 中的建表语句，在 Doris 中执行。
-
-下面是 `lineorder_flat` 表建表语句。在上面的 `create-ssb-flat-table.sh`  脚本中创建"lineorder_flat"表，并进行了默认分桶数（48个桶)。您可以删除该表，根据您的集群规模节点配置对这个分桶数进行调整，这样可以获取到更好的一个测试效果。
+下面是 `lineorder_flat` 表建表语句。在上面的 `bin/create-ssb-table.sh` 脚本中创建"lineorder_flat"表，并进行了默认分桶数（48 个桶)。您可以删除该表，根据您的集群规模节点配置对这个分桶数进行调整，这样可以获取到更好的一个测试效果。
 
 ```sql
 CREATE TABLE `lineorder_flat` (
@@ -241,40 +234,19 @@ PROPERTIES (
 );
 ```
 
-
-
-
 ### 6.4 导入数据
 
-#### 6.4.1 导入 4 张维度表数据
-
-因为这 4 张维表（customer, part, supplier and date）数据量较小，导入较简单，我们使用以下命令先导入这4表的数据：
+下面的脚本根据 `conf/doris-cluster.conf` 中的参数连接 Doirs 进行导入，单线程导入数据量较小的 4 张维度表（customer, part, supplier and date），并发导入 1 张事实表（lineorder），以及采用 'INSERT INTO ... SELECT ... ' 的方式导入宽表（lineorder_flat）。
 
 ```shell
-sh load-ssb-dimension-data.sh
+bash bin/load-ssb-data.sh
 ```
 
-#### 6.4.2 导入事实表 lineorder。
-
-通过以下命令导入 lineorder 表数据
-
-````shell
-sh load-ssb-fact-data.sh -c 5
-````
-
-`-c 5` 表示启动 5 个并发线程导入（默认为3）。在单 BE 节点情况下，由 `sh gen-ssb-data.sh -s 100 -c 100` 生成的 lineorder 数据，使用 `sh load-ssb-fact-data.sh -c 3` 的导入时间约为 10min。内存开销约为 5-6GB。如果开启更多线程，可以加快导入速度，但会增加额外的内存开销。
-
-> 注：为获得更快的导入速度，你可以在 be.conf 中添加 `flush_thread_num_per_store=5` 后重启BE。该配置表示每个数据目录的写盘线程数，默认为2。较大的数据可以提升写数据吞吐，但可能会增加 IO Util。（参考值：1块机械磁盘，在默认为2的情况下，导入过程中的 IO Util 约为12%，设置为5时，IO Util 约为26%。如果是 SSD 盘，则几乎为 0）。
-
-#### 6.4.3 导入flat表
-
-通过以下命令导入 lineorder_flat 表数据：
-
-```shell
-sh load-ssb-flat-data.sh
-```
-
-> 注：flat 表数据采用 'INSERT INTO ... SELECT ... ' 的方式导入。
+> 注 1：通过 `bash bin/load-ssb-data.sh -h` 查看脚本帮助, 默认 5 线程并发导入 lineorder，即 `-c 5` 。如果开启更多线程，可以加快导入速度，但会增加额外的内存开销。
+>
+> 注 2：为获得更快的导入速度，你可以在 be.conf 中添加 `flush_thread_num_per_store=5` 后重启 BE。该配置表示每个数据目录的写盘线程数，默认为 2。较大的数据可以提升写数据吞吐，但可能会增加 IO Util。（参考值：1 块机械磁盘，在默认为 2 的情况下，导入过程中的 IO Util 约为 12%，设置为 5 时，IO Util 约为 26%。如果是 SSD 盘，则几乎为 0）。
+>
+> 注 3：导入 customer, part, supplier, date 及 lineorder 表耗时 389s，打平到 lineorder_flat 耗时 740s.
 
 ### 6.5 检查导入数据
 
@@ -300,7 +272,15 @@ select count(*) from lineorder_flat;
 
 ### 6.6 查询测试
 
-#### 6.6.1 测试SQL
+#### 6.6.1 测试脚本
+
+下面脚本根据 `conf/doris-cluster.conf` 中的参数连接 Doris，执行查询前会先打印出各表的数据行数。
+
+```shell
+bash bin/run-ssb-flat-queries.sh
+```
+
+#### 6.6.2 测试 SQL
 
 ```sql
 --Q1.1
@@ -386,4 +366,3 @@ WHERE S_NATION = 'UNITED STATES' AND LO_ORDERDATE >= 19970101 AND LO_ORDERDATE <
 GROUP BY YEAR, S_CITY, P_BRAND
 ORDER BY YEAR ASC, S_CITY ASC, P_BRAND ASC;
 ```
-

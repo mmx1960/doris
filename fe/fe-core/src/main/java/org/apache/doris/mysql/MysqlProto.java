@@ -20,13 +20,13 @@ package org.apache.doris.mysql;
 import org.apache.doris.analysis.UserIdentity;
 import org.apache.doris.catalog.Env;
 import org.apache.doris.cluster.ClusterNamespace;
+import org.apache.doris.common.AuthenticationException;
 import org.apache.doris.common.Config;
 import org.apache.doris.common.DdlException;
 import org.apache.doris.common.ErrorCode;
 import org.apache.doris.common.ErrorReport;
 import org.apache.doris.common.LdapConfig;
 import org.apache.doris.ldap.LdapAuthenticate;
-import org.apache.doris.ldap.LdapClient;
 import org.apache.doris.mysql.privilege.PaloAuth;
 import org.apache.doris.mysql.privilege.UserResource;
 import org.apache.doris.qe.ConnectContext;
@@ -50,13 +50,14 @@ public class MysqlProto {
     // user_name#HIGH@cluster_name
     private static boolean authenticate(ConnectContext context, byte[] scramble,
             byte[] randomString, String qualifiedUser) {
-        String usePasswd = scramble.length == 0 ? "NO" : "YES";
         String remoteIp = context.getMysqlChannel().getRemoteIp();
-
         List<UserIdentity> currentUserIdentity = Lists.newArrayList();
-        if (!Env.getCurrentEnv().getAuth().checkPassword(qualifiedUser, remoteIp,
-                scramble, randomString, currentUserIdentity)) {
-            ErrorReport.report(ErrorCode.ERR_ACCESS_DENIED_ERROR, qualifiedUser, context.getRemoteIP(), usePasswd);
+
+        try {
+            Env.getCurrentEnv().getAuth().checkPassword(qualifiedUser, remoteIp,
+                    scramble, randomString, currentUserIdentity);
+        } catch (AuthenticationException e) {
+            ErrorReport.report(e.errorCode, e.msgs);
             return false;
         }
 
@@ -137,11 +138,8 @@ public class MysqlProto {
         }
         // If LDAP authentication is enabled and the user exists in LDAP, use LDAP authentication,
         // otherwise use Doris authentication.
-        if (LdapConfig.ldap_authentication_enabled
-                && LdapClient.doesUserExist(ClusterNamespace.getNameFromFullName(qualifiedUser))) {
-            return true;
-        }
-        return false;
+        return LdapConfig.ldap_authentication_enabled && Env.getCurrentEnv().getAuth().getLdapManager()
+                .doesUserExist(qualifiedUser);
     }
 
     /**
@@ -206,7 +204,7 @@ public class MysqlProto {
         try {
             useLdapAuthenticate = useLdapAuthenticate(qualifiedUser);
         } catch (Exception e) {
-            LOG.debug("Check if user exists in ldap error.", e);
+            LOG.warn("Check if user exists in ldap error.", e);
             sendResponsePacket(context);
             return false;
         }

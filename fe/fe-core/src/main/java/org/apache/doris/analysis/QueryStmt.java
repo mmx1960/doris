@@ -21,6 +21,7 @@
 package org.apache.doris.analysis;
 
 import org.apache.doris.catalog.TableIf;
+import org.apache.doris.catalog.Type;
 import org.apache.doris.common.AnalysisException;
 import org.apache.doris.common.ErrorCode;
 import org.apache.doris.common.ErrorReport;
@@ -301,7 +302,7 @@ public abstract class QueryStmt extends StatementBase implements Queriable {
             isAscOrder.add(Boolean.valueOf(orderByElement.getIsAsc()));
             nullsFirstParams.add(orderByElement.getNullsFirstParam());
         }
-        substituteOrdinalsAliases(orderingExprs, "ORDER BY", analyzer);
+        substituteOrdinalsAliases(orderingExprs, "ORDER BY", analyzer, true);
 
         // save the order by element after analyzed
         orderByElementsAfterAnalyzed = Lists.newArrayList();
@@ -316,6 +317,12 @@ public abstract class QueryStmt extends StatementBase implements Queriable {
         if (!analyzer.isRootAnalyzer() && hasOffset() && !hasLimit()) {
             throw new AnalysisException("Order-by with offset without limit not supported"
                     + " in nested queries.");
+        }
+
+        for (Expr expr : orderingExprs) {
+            if (expr.getType().isOnlyMetricType()) {
+                throw new AnalysisException(Type.OnlyMetricTypeErrorMsg);
+            }
         }
 
         sortInfo = new SortInfo(orderingExprs, isAscOrder, nullsFirstParams);
@@ -408,7 +415,7 @@ public abstract class QueryStmt extends StatementBase implements Queriable {
      * Modifies exprs list in-place.
      */
     protected void substituteOrdinalsAliases(List<Expr> exprs, String errorPrefix,
-                                             Analyzer analyzer) throws AnalysisException {
+                                             Analyzer analyzer, boolean aliasFirst) throws AnalysisException {
         Expr ambiguousAlias = getFirstAmbiguousAlias(exprs);
         if (ambiguousAlias != null) {
             ErrorReport.reportAnalysisException(ErrorCode.ERR_NON_UNIQ_ERROR, ambiguousAlias.toColumnLabel());
@@ -423,9 +430,22 @@ public abstract class QueryStmt extends StatementBase implements Queriable {
             // alias substitution is not performed in the same way.
             Expr substituteExpr = trySubstituteOrdinal(expr, errorPrefix, analyzer);
             if (substituteExpr == null) {
-                substituteExpr = expr.trySubstitute(aliasSMap, analyzer, false);
+                if (aliasFirst) {
+                    substituteExpr = expr.trySubstitute(aliasSMap, analyzer, false);
+                    i.set(substituteExpr);
+                } else {
+                    try {
+                        // use col name from tableRefs first
+                        expr.analyze(analyzer);
+                    } catch (AnalysisException ex) {
+                        // then consider alias name
+                        substituteExpr = expr.trySubstitute(aliasSMap, analyzer, false);
+                        i.set(substituteExpr);
+                    }
+                }
+            } else {
+                i.set(substituteExpr);
             }
-            i.set(substituteExpr);
         }
     }
 
@@ -447,18 +467,17 @@ public abstract class QueryStmt extends StatementBase implements Queriable {
         }
         if (pos > resultExprs.size()) {
             throw new AnalysisException(
-                    errorPrefix + ": ordinal exceeds number of items in select list: "
-                            + expr.toSql());
+                    errorPrefix + ": ordinal exceeds number of items in select list: " + expr.toSql());
         }
 
         // Create copy to protect against accidentally shared state.
         return resultExprs.get((int) pos - 1).clone();
     }
 
-    public void getWithClauseTables(Analyzer analyzer, Map<Long, TableIf> tableMap, Set<String> parentViewNameSet)
-            throws AnalysisException {
+    public void getWithClauseTables(Analyzer analyzer, boolean expandView, Map<Long, TableIf> tableMap,
+            Set<String> parentViewNameSet) throws AnalysisException {
         if (withClause != null) {
-            withClause.getTables(analyzer, tableMap, parentViewNameSet);
+            withClause.getTables(analyzer, expandView, tableMap, parentViewNameSet);
         }
     }
 
@@ -535,8 +554,8 @@ public abstract class QueryStmt extends StatementBase implements Queriable {
     // tmp in child stmt "(select siteid, citycode from tmp)" do not contain with_Clause
     // so need to check is view name by parentViewNameSet.
     // issue link: https://github.com/apache/doris/issues/4598
-    public abstract void getTables(Analyzer analyzer, Map<Long, TableIf> tables, Set<String> parentViewNameSet)
-            throws AnalysisException;
+    public abstract void getTables(Analyzer analyzer, boolean expandView, Map<Long, TableIf> tables,
+            Set<String> parentViewNameSet) throws AnalysisException;
 
     // get TableRefs in this query, including physical TableRefs of this statement and
     // nested statements of inline views and with_Clause.

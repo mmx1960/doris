@@ -21,6 +21,7 @@ import org.apache.doris.catalog.Replica.ReplicaState;
 import org.apache.doris.clone.TabletSchedCtx;
 import org.apache.doris.clone.TabletSchedCtx.Priority;
 import org.apache.doris.common.Config;
+import org.apache.doris.common.FeConstants;
 import org.apache.doris.common.Pair;
 import org.apache.doris.common.io.Writable;
 import org.apache.doris.resource.Tag;
@@ -429,8 +430,8 @@ public class Tablet extends MetaObject implements Writable {
         ArrayList<Long> versions = new ArrayList<>();
         for (Replica replica : replicas) {
             Backend backend = systemInfoService.getBackend(replica.getBackendId());
-            if (backend == null || !backend.isAlive() || !replica.isAlive() || !hosts.add(backend.getHost())
-                    || replica.tooSlow()) {
+            if (backend == null || !backend.isAlive() || !replica.isAlive()
+                    || checkHost(hosts, backend) || replica.tooSlow() || !backend.isMixNode()) {
                 // this replica is not alive,
                 // or if this replica is on same host with another replica, we also treat it as 'dead',
                 // so that Tablet Scheduler will create a new replica on different host.
@@ -470,7 +471,7 @@ public class Tablet extends MetaObject implements Writable {
         // 1. alive replicas are not enough
         int aliveBackendsNum = aliveBeIdsInCluster.size();
         if (alive == 0) {
-            return Pair.create(TabletStatus.UNRECOVERABLE, Priority.VERY_HIGH);
+            return Pair.of(TabletStatus.UNRECOVERABLE, Priority.VERY_HIGH);
         } else if (alive < replicationNum && replicas.size() >= aliveBackendsNum
                 && aliveBackendsNum >= replicationNum && replicationNum > 1) {
             // there is no enough backend for us to create a new replica, so we have to delete an existing replica,
@@ -482,26 +483,26 @@ public class Tablet extends MetaObject implements Writable {
             // 3. aliveBackendsNum >= replicationNum: make sure after deleting,
             //    there will be at least one backend for new replica.
             // 4. replicationNum > 1: if replication num is set to 1, do not delete any replica, for safety reason
-            return Pair.create(TabletStatus.FORCE_REDUNDANT, TabletSchedCtx.Priority.VERY_HIGH);
+            return Pair.of(TabletStatus.FORCE_REDUNDANT, TabletSchedCtx.Priority.VERY_HIGH);
         } else if (alive < (replicationNum / 2) + 1) {
-            return Pair.create(TabletStatus.REPLICA_MISSING, TabletSchedCtx.Priority.HIGH);
+            return Pair.of(TabletStatus.REPLICA_MISSING, TabletSchedCtx.Priority.HIGH);
         } else if (alive < replicationNum) {
-            return Pair.create(TabletStatus.REPLICA_MISSING, TabletSchedCtx.Priority.NORMAL);
+            return Pair.of(TabletStatus.REPLICA_MISSING, TabletSchedCtx.Priority.NORMAL);
         }
 
         // 2. version complete replicas are not enough
         if (aliveAndVersionComplete == 0) {
-            return Pair.create(TabletStatus.UNRECOVERABLE, Priority.VERY_HIGH);
+            return Pair.of(TabletStatus.UNRECOVERABLE, Priority.VERY_HIGH);
         } else if (aliveAndVersionComplete < (replicationNum / 2) + 1) {
-            return Pair.create(TabletStatus.VERSION_INCOMPLETE, TabletSchedCtx.Priority.HIGH);
+            return Pair.of(TabletStatus.VERSION_INCOMPLETE, TabletSchedCtx.Priority.HIGH);
         } else if (aliveAndVersionComplete < replicationNum) {
-            return Pair.create(TabletStatus.VERSION_INCOMPLETE, TabletSchedCtx.Priority.NORMAL);
+            return Pair.of(TabletStatus.VERSION_INCOMPLETE, TabletSchedCtx.Priority.NORMAL);
         } else if (aliveAndVersionComplete > replicationNum) {
             if (needFurtherRepairReplica != null) {
-                return Pair.create(TabletStatus.NEED_FURTHER_REPAIR, TabletSchedCtx.Priority.HIGH);
+                return Pair.of(TabletStatus.NEED_FURTHER_REPAIR, TabletSchedCtx.Priority.HIGH);
             }
             // we set REDUNDANT as VERY_HIGH, because delete redundant replicas can free the space quickly.
-            return Pair.create(TabletStatus.REDUNDANT, TabletSchedCtx.Priority.VERY_HIGH);
+            return Pair.of(TabletStatus.REDUNDANT, TabletSchedCtx.Priority.VERY_HIGH);
         }
 
         // 3. replica is under relocating
@@ -514,36 +515,36 @@ public class Tablet extends MetaObject implements Writable {
             if (replicaBeIds.containsAll(availableBeIds)
                     && availableBeIds.size() >= replicationNum
                     && replicationNum > 1) { // No BE can be choose to create a new replica
-                return Pair.create(TabletStatus.FORCE_REDUNDANT,
+                return Pair.of(TabletStatus.FORCE_REDUNDANT,
                         stable < (replicationNum / 2) + 1
                                 ? TabletSchedCtx.Priority.NORMAL : TabletSchedCtx.Priority.LOW);
             }
             if (stable < (replicationNum / 2) + 1) {
-                return Pair.create(TabletStatus.REPLICA_RELOCATING, TabletSchedCtx.Priority.NORMAL);
+                return Pair.of(TabletStatus.REPLICA_RELOCATING, TabletSchedCtx.Priority.NORMAL);
             } else if (stable < replicationNum) {
-                return Pair.create(TabletStatus.REPLICA_RELOCATING, TabletSchedCtx.Priority.LOW);
+                return Pair.of(TabletStatus.REPLICA_RELOCATING, TabletSchedCtx.Priority.LOW);
             }
         }
 
         // 4. healthy replicas in cluster are not enough
         if (availableInCluster < replicationNum) {
-            return Pair.create(TabletStatus.REPLICA_MISSING_IN_CLUSTER, TabletSchedCtx.Priority.LOW);
+            return Pair.of(TabletStatus.REPLICA_MISSING_IN_CLUSTER, TabletSchedCtx.Priority.LOW);
         }
 
         // 5. got enough healthy replicas, check tag
         for (Map.Entry<Tag, Short> alloc : allocMap.entrySet()) {
             if (!currentAllocMap.containsKey(alloc.getKey())
                     || currentAllocMap.get(alloc.getKey()) < alloc.getValue()) {
-                return Pair.create(TabletStatus.REPLICA_MISSING_FOR_TAG, TabletSchedCtx.Priority.NORMAL);
+                return Pair.of(TabletStatus.REPLICA_MISSING_FOR_TAG, TabletSchedCtx.Priority.NORMAL);
             }
         }
 
         if (replicas.size() > replicationNum) {
             if (needFurtherRepairReplica != null) {
-                return Pair.create(TabletStatus.NEED_FURTHER_REPAIR, TabletSchedCtx.Priority.HIGH);
+                return Pair.of(TabletStatus.NEED_FURTHER_REPAIR, TabletSchedCtx.Priority.HIGH);
             }
             // we set REDUNDANT as VERY_HIGH, because delete redundant replicas can free the space quickly.
-            return Pair.create(TabletStatus.REDUNDANT, TabletSchedCtx.Priority.VERY_HIGH);
+            return Pair.of(TabletStatus.REDUNDANT, TabletSchedCtx.Priority.VERY_HIGH);
         }
 
         // 6. find a replica's version count is much more than others, and drop it
@@ -555,12 +556,16 @@ public class Tablet extends MetaObject implements Writable {
             double ratio = (double) delta / versions.get(versions.size() - 1);
             if (versions.get(versions.size() - 1) > Config.min_version_count_indicate_replica_compaction_too_slow
                     && ratio > Config.valid_version_count_delta_ratio_between_replicas) {
-                return Pair.create(TabletStatus.REPLICA_COMPACTION_TOO_SLOW, Priority.HIGH);
+                return Pair.of(TabletStatus.REPLICA_COMPACTION_TOO_SLOW, Priority.HIGH);
             }
         }
 
         // 7. healthy
-        return Pair.create(TabletStatus.HEALTHY, TabletSchedCtx.Priority.NORMAL);
+        return Pair.of(TabletStatus.HEALTHY, TabletSchedCtx.Priority.NORMAL);
+    }
+
+    private boolean checkHost(Set<String> hosts, Backend backend) {
+        return !Config.allow_replica_on_same_host && !FeConstants.runningUnitTest && !hosts.add(backend.getHost());
     }
 
     /**

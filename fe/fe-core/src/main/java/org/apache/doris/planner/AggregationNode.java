@@ -190,7 +190,7 @@ public class AggregationNode extends PlanNode {
         }
 
         StatsRecursiveDerive.getStatsRecursiveDerive().statsRecursiveDerive(this);
-        cardinality = statsDeriveResult.getRowCount();
+        cardinality = (long) statsDeriveResult.getRowCount();
     }
 
     @Override
@@ -248,6 +248,7 @@ public class AggregationNode extends PlanNode {
 
     @Override
     protected void toThrift(TPlanNode msg) {
+        aggInfo.updateMaterializedSlots();
         msg.node_type = TPlanNodeType.AGGREGATION_NODE;
         List<TExpr> aggregateFunctions = Lists.newArrayList();
         List<TSortInfo> aggSortInfos = Lists.newArrayList();
@@ -273,6 +274,7 @@ public class AggregationNode extends PlanNode {
         msg.agg_node.setAggSortInfos(aggSortInfos);
         msg.agg_node.setUseStreamingPreaggregation(useStreamingPreagg);
         msg.agg_node.setIsFirstPhase(aggInfo.isFirstPhase());
+        msg.agg_node.setUseFixedLengthSerializationOpt(true);
         List<Expr> groupingExprs = aggInfo.getGroupingExprs();
         if (groupingExprs != null) {
             msg.agg_node.setGroupingExprs(Expr.treesToThrift(groupingExprs));
@@ -288,24 +290,29 @@ public class AggregationNode extends PlanNode {
 
     @Override
     public String getNodeExplainString(String detailPrefix, TExplainLevel detailLevel) {
+        aggInfo.updateMaterializedSlots();
         StringBuilder output = new StringBuilder();
         String nameDetail = getDisplayLabelDetail();
         if (nameDetail != null) {
-            output.append(detailPrefix + nameDetail + "\n");
+            output.append(detailPrefix).append(nameDetail).append("\n");
         }
 
         if (detailLevel == TExplainLevel.BRIEF) {
+            output.append(detailPrefix).append(String.format(
+                    "cardinality=%s", cardinality)).append("\n");
             return output.toString();
         }
 
         if (aggInfo.getAggregateExprs() != null && aggInfo.getMaterializedAggregateExprs().size() > 0) {
-            output.append(detailPrefix + "output: ").append(
-                    getExplainString(aggInfo.getAggregateExprs()) + "\n");
+            output.append(detailPrefix).append("output: ")
+                    .append(getExplainString(aggInfo.getMaterializedAggregateExprs())).append("\n");
         }
         // TODO: group by can be very long. Break it into multiple lines
-        output.append(detailPrefix + "group by: ").append(getExplainString(aggInfo.getGroupingExprs()) + "\n");
+        output.append(detailPrefix).append("group by: ")
+                .append(getExplainString(aggInfo.getGroupingExprs()))
+                .append("\n");
         if (!conjuncts.isEmpty()) {
-            output.append(detailPrefix + "having: ").append(getExplainString(conjuncts) + "\n");
+            output.append(detailPrefix).append("having: ").append(getExplainString(conjuncts)).append("\n");
         }
         output.append(detailPrefix).append(String.format(
                 "cardinality=%s", cardinality)).append("\n");

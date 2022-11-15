@@ -34,13 +34,13 @@ import java.util.List;
 public class ArrayLiteral extends LiteralExpr {
 
     public ArrayLiteral() {
-        type = new ArrayType(Type.NULL, false);
+        type = new ArrayType(Type.NULL);
         children = new ArrayList<>();
     }
 
     public ArrayLiteral(LiteralExpr... exprs) throws AnalysisException {
         Type itemType = Type.NULL;
-        boolean containsNull = false;
+        boolean containsNull = true;
         for (LiteralExpr expr : exprs) {
             if (itemType == Type.NULL) {
                 itemType = expr.getType();
@@ -53,7 +53,7 @@ public class ArrayLiteral extends LiteralExpr {
             }
         }
 
-        if (itemType == Type.NULL || itemType == Type.INVALID) {
+        if (itemType == Type.INVALID) {
             throw new AnalysisException("Invalid element type in ARRAY");
         }
 
@@ -61,7 +61,7 @@ public class ArrayLiteral extends LiteralExpr {
 
         children = new ArrayList<>();
         for (LiteralExpr expr : exprs) {
-            if (expr.getType() == itemType) {
+            if (expr.getType().equals(itemType)) {
                 children.add(expr);
             } else {
                 children.add(expr.castTo(itemType));
@@ -102,9 +102,15 @@ public class ArrayLiteral extends LiteralExpr {
     @Override
     public String getStringValue() {
         List<String> list = new ArrayList<>(children.size());
-        children.forEach(v -> list.add(((LiteralExpr) v).getStringValue()));
-
+        children.forEach(v -> list.add(v.getStringValue()));
         return "ARRAY[" + StringUtils.join(list, ", ") + "]";
+    }
+
+    @Override
+    public String getStringValueForArray() {
+        List<String> list = new ArrayList<>(children.size());
+        children.forEach(v -> list.add(v.getStringValueForArray()));
+        return "[" + StringUtils.join(list, ", ") + "]";
     }
 
     @Override
@@ -156,4 +162,12 @@ public class ArrayLiteral extends LiteralExpr {
         literal.setType(targetType);
         return literal;
     }
+
+    @Override
+    public void checkValueValid() throws AnalysisException {
+        for (Expr e : children) {
+            e.checkValueValid();
+        }
+    }
 }
+

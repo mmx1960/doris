@@ -140,7 +140,6 @@ TabletMeta::TabletMeta(int64_t table_id, int64_t partition_id, int64_t tablet_id
 
     // set column information
     uint32_t col_ordinal = 0;
-    uint32_t key_count = 0;
     bool has_bf_columns = false;
     for (TColumn tcolumn : tablet_schema.columns) {
         ColumnPB* column = schema->add_column();
@@ -152,10 +151,6 @@ TabletMeta::TabletMeta(int64_t table_id, int64_t partition_id, int64_t tablet_id
         }
         col_ordinal++;
         init_column_from_tcolumn(unique_id, tcolumn, column);
-
-        if (column->is_key()) {
-            ++key_count;
-        }
 
         if (column->is_bf_column()) {
             has_bf_columns = true;
@@ -174,6 +169,41 @@ TabletMeta::TabletMeta(int64_t table_id, int64_t partition_id, int64_t tablet_id
         }
     }
 
+    // copy index meta
+    if (tablet_schema.__isset.indexes) {
+        for (auto& index : tablet_schema.indexes) {
+            TabletIndexPB* index_pb = schema->add_index();
+            index_pb->set_index_id(index.index_id);
+            index_pb->set_index_name(index.index_name);
+            // init col_unique_id in index at be side, since col_unique_id may be -1 at fe side
+            // get column unique id by name
+            for (auto column_name : index.columns) {
+                for (auto column : schema->column()) {
+                    if (iequal(column.name(), column_name)) {
+                        index_pb->add_col_unique_id(column.unique_id());
+                    }
+                }
+            }
+            switch (index.index_type) {
+            case TIndexType::BITMAP:
+                index_pb->set_index_type(IndexType::BITMAP);
+                break;
+            case TIndexType::INVERTED:
+                index_pb->set_index_type(IndexType::INVERTED);
+                break;
+            case TIndexType::BLOOMFILTER:
+                index_pb->set_index_type(IndexType::BLOOMFILTER);
+                break;
+            }
+            if (index.__isset.properties) {
+                auto properties = index_pb->mutable_properties();
+                for (auto kv : index.properties) {
+                    (*properties)[kv.first] = kv.second;
+                }
+            }
+        }
+    }
+
     schema->set_next_column_unique_id(next_unique_id);
     if (has_bf_columns && tablet_schema.__isset.bloom_filter_fpp) {
         schema->set_bf_fpp(tablet_schema.bloom_filter_fpp);
@@ -181,6 +211,10 @@ TabletMeta::TabletMeta(int64_t table_id, int64_t partition_id, int64_t tablet_id
 
     if (tablet_schema.__isset.is_in_memory) {
         schema->set_is_in_memory(tablet_schema.is_in_memory);
+    }
+
+    if (tablet_schema.__isset.disable_auto_compaction) {
+        schema->set_disable_auto_compaction(tablet_schema.disable_auto_compaction);
     }
 
     if (tablet_schema.__isset.delete_sign_idx) {
@@ -204,10 +238,10 @@ TabletMeta::TabletMeta(const TabletMeta& b)
           _schema(b._schema),
           _rs_metas(b._rs_metas),
           _stale_rs_metas(b._stale_rs_metas),
-          _del_predicates(b._del_predicates),
           _in_restore_mode(b._in_restore_mode),
           _preferred_rowset_type(b._preferred_rowset_type),
           _storage_policy(b._storage_policy),
+          _enable_unique_key_merge_on_write(b._enable_unique_key_merge_on_write),
           _delete_bitmap(b._delete_bitmap) {};
 
 void TabletMeta::init_column_from_tcolumn(uint32_t unique_id, const TColumn& tcolumn,
@@ -309,6 +343,20 @@ std::string TabletMeta::construct_header_file_path(const string& schema_hash_pat
     return header_name_stream.str();
 }
 
+Status TabletMeta::save_as_json(const string& file_path, DataDir* dir) {
+    std::string json_meta;
+    json2pb::Pb2JsonOptions json_options;
+    json_options.pretty_json = true;
+    json_options.bytes_to_base64 = true;
+    to_json(&json_meta, json_options);
+    // save to file
+    io::FileWriterPtr file_writer;
+    RETURN_IF_ERROR(dir->fs()->create_file(file_path, &file_writer));
+    RETURN_IF_ERROR(file_writer->append(json_meta));
+    RETURN_IF_ERROR(file_writer->close());
+    return Status::OK();
+}
+
 Status TabletMeta::save(const string& file_path) {
     TabletMetaPB tablet_meta_pb;
     to_meta_pb(&tablet_meta_pb);
@@ -384,7 +432,7 @@ Status TabletMeta::deserialize(const string& meta_binary) {
     return Status::OK();
 }
 
-void TabletMeta::init_rs_metas_fs(const io::FileSystemPtr& fs) {
+void TabletMeta::init_rs_metas_fs(const io::FileSystemSPtr& fs) {
     for (auto& rs_meta : _rs_metas) {
         if (rs_meta->is_local()) {
             rs_meta->set_fs(fs);
@@ -442,9 +490,6 @@ void TabletMeta::init_from_pb(const TabletMetaPB& tablet_meta_pb) {
     for (auto& it : tablet_meta_pb.rs_metas()) {
         RowsetMetaSharedPtr rs_meta(new RowsetMeta());
         rs_meta->init_from_pb(it);
-        if (rs_meta->has_delete_predicate()) {
-            add_delete_predicate(rs_meta->delete_predicate(), rs_meta->version().first);
-        }
         _rs_metas.push_back(std::move(rs_meta));
     }
 
@@ -532,11 +577,17 @@ void TabletMeta::to_meta_pb(TabletMetaPB* tablet_meta_pb) {
     tablet_meta_pb->set_storage_policy(_storage_policy);
     tablet_meta_pb->set_enable_unique_key_merge_on_write(_enable_unique_key_merge_on_write);
 
-    {
-        std::shared_lock l(delete_bitmap().lock);
+    if (_enable_unique_key_merge_on_write) {
+        std::set<RowsetId> rs_ids;
+        for (const auto& rowset : _rs_metas) {
+            rs_ids.insert(rowset->rowset_id());
+        }
         DeleteBitmapPB* delete_bitmap_pb = tablet_meta_pb->mutable_delete_bitmap();
-        for (auto& [id, bitmap] : delete_bitmap().delete_bitmap) {
+        for (auto& [id, bitmap] : delete_bitmap().snapshot().delete_bitmap) {
             auto& [rowset_id, segment_id, ver] = id;
+            if (rs_ids.count(rowset_id) == 0) {
+                continue;
+            }
             delete_bitmap_pb->add_rowset_ids(rowset_id.to_string());
             delete_bitmap_pb->add_segment_ids(segment_id);
             delete_bitmap_pb->add_versions(ver);
@@ -569,6 +620,19 @@ Version TabletMeta::max_version() const {
     return max_version;
 }
 
+// Find the rowset with specified version and return its schema
+// Currently, this API is used by delete condition
+const TabletSchemaSPtr TabletMeta::tablet_schema(Version version) const {
+    auto it = _rs_metas.begin();
+    while (it != _rs_metas.end()) {
+        if ((*it)->version() == version) {
+            return (*it)->tablet_schema();
+        }
+        ++it;
+    }
+    return nullptr;
+}
+
 Status TabletMeta::add_rs_meta(const RowsetMetaSharedPtr& rs_meta) {
     // check RowsetMeta is valid
     for (auto& rs : _rs_metas) {
@@ -583,12 +647,7 @@ Status TabletMeta::add_rs_meta(const RowsetMetaSharedPtr& rs_meta) {
             }
         }
     }
-
     _rs_metas.push_back(rs_meta);
-    if (rs_meta->has_delete_predicate()) {
-        add_delete_predicate(rs_meta->delete_predicate(), rs_meta->version().first);
-    }
-
     return Status::OK();
 }
 
@@ -616,9 +675,6 @@ void TabletMeta::modify_rs_metas(const std::vector<RowsetMetaSharedPtr>& to_add,
         auto it = _rs_metas.begin();
         while (it != _rs_metas.end()) {
             if (rs_to_del->version() == (*it)->version()) {
-                if ((*it)->has_delete_predicate()) {
-                    remove_delete_predicate_by_version((*it)->version());
-                }
                 _rs_metas.erase(it);
                 // there should be only one rowset match the version
                 break;
@@ -670,9 +726,12 @@ void TabletMeta::delete_stale_rs_meta_by_version(const Version& version) {
     auto it = _stale_rs_metas.begin();
     while (it != _stale_rs_metas.end()) {
         if ((*it)->version() == version) {
+            if (_enable_unique_key_merge_on_write) {
+                // remove rowset delete bitmap
+                delete_bitmap().remove({(*it)->rowset_id(), 0, 0},
+                                       {(*it)->rowset_id(), UINT32_MAX, 0});
+            }
             it = _stale_rs_metas.erase(it);
-            // remove rowset delete bitmap
-            delete_bitmap().remove({(*it)->rowset_id(), 0, 0}, {(*it)->rowset_id(), UINT32_MAX, 0});
         } else {
             it++;
         }
@@ -697,36 +756,14 @@ RowsetMetaSharedPtr TabletMeta::acquire_stale_rs_meta_by_version(const Version& 
     return nullptr;
 }
 
-void TabletMeta::add_delete_predicate(const DeletePredicatePB& delete_predicate, int64_t version) {
-    for (auto& del_pred : _del_predicates) {
-        if (del_pred.version() == version) {
-            *del_pred.mutable_sub_predicates() = delete_predicate.sub_predicates();
-            return;
+const std::vector<RowsetMetaSharedPtr> TabletMeta::delete_predicates() const {
+    std::vector<RowsetMetaSharedPtr> res;
+    for (auto& del_pred : _rs_metas) {
+        if (del_pred->has_delete_predicate()) {
+            res.push_back(del_pred);
         }
     }
-    DeletePredicatePB copied_pred = delete_predicate;
-    copied_pred.set_version(version);
-    _del_predicates.emplace_back(copied_pred);
-}
-
-void TabletMeta::remove_delete_predicate_by_version(const Version& version) {
-    DCHECK(version.first == version.second) << "version=" << version;
-    int pred_to_del = -1;
-    for (int i = 0; i < _del_predicates.size(); ++i) {
-        if (_del_predicates[i].version() == version.first) {
-            pred_to_del = i;
-            // one DeletePredicatePB stands for a nested predicate, such as user submit a delete predicate a=1 and b=2
-            // they could be saved as a one DeletePredicatePB
-            break;
-        }
-    }
-    if (pred_to_del > -1) {
-        _del_predicates.erase(_del_predicates.begin() + pred_to_del);
-    }
-}
-
-const std::vector<DeletePredicatePB>& TabletMeta::delete_predicates() const {
-    return _del_predicates;
+    return res;
 }
 
 bool TabletMeta::version_for_delete_predicate(const Version& version) {
@@ -734,8 +771,8 @@ bool TabletMeta::version_for_delete_predicate(const Version& version) {
         return false;
     }
 
-    for (auto& del_pred : _del_predicates) {
-        if (del_pred.version() == version.first) {
+    for (auto& del_pred : _rs_metas) {
+        if (del_pred->version().first == version.first && del_pred->has_delete_predicate()) {
             return true;
         }
     }

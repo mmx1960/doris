@@ -40,7 +40,7 @@ suite("load") {
         sql new File("""${context.file.parent}/ddl/${table}_create.sql""").text
         sql new File("""${context.file.parent}/ddl/${table}_delete.sql""").text
     }
-    i = 0
+    def i = 0
     for (String tableName in tables) {   
         streamLoad {
             // a default db 'regression_test' is specified in
@@ -57,7 +57,7 @@ suite("load") {
             set 'columns', columns[i]
             // relate to ${DORIS_HOME}/regression-test/data/demo/streamload_input.csv.
             // also, you can stream load a http stream, e.g. http://xxx/some.csv
-            file """${context.sf1DataPath}/ssb/sf1/${tableName}.tbl.gz"""
+            file """${context.sf1DataPath}/ssb/sf1/${tableName}.tbl.split00.gz"""
 
             time 10000 // limit inflight 10s
 
@@ -76,13 +76,48 @@ suite("load") {
                 assertTrue(json.NumberLoadedRows > 0 && json.LoadBytes > 0)
             }
         }
+        streamLoad {
+            // a default db 'regression_test' is specified in
+            // ${DORIS_HOME}/conf/regression-conf.groovy
+            table tableName
+
+            // default label is UUID:
+            // set 'label' UUID.randomUUID().toString()
+
+            // default column_separator is specify in doris fe config, usually is '\t'.
+            // this line change to ','
+            set 'column_separator', '|'
+            set 'compress_type', 'GZ'
+            set 'columns', columns[i]
+            // relate to ${DORIS_HOME}/regression-test/data/demo/streamload_input.csv.
+            // also, you can stream load a http stream, e.g. http://xxx/some.csv
+            file """${context.sf1DataPath}/ssb/sf1/${tableName}.tbl.split01.gz"""
+
+            time 10000 // limit inflight 10s
+
+            // stream load action will check result, include Success status, and NumberTotalRows == NumberLoadedRows
+
+            // if declared a check callback, the default check condition will ignore.
+            // So you must check all condition
+            check { result, exception, startTime, endTime ->
+                if (exception != null) {
+                    throw exception
+                }
+                log.info("Stream load result: ${result}".toString())
+                def json = parseJson(result)
+                assertEquals("success", json.Status.toLowerCase())
+                assertEquals(json.NumberTotalRows, json.NumberLoadedRows)
+                assertTrue(json.NumberLoadedRows > 0 && json.LoadBytes > 0)
+            }
+        }
+        log.info("yyq ${i}  ${tableName} ${columns[i]}".toString())
         i++
     }
 
     def table = "lineorder_flat"
     def table_rows = 6001215
     sql new File("""${context.file.parent}/ddl/${table}_create.sql""").text
-    rowCount = sql "select count(*) from ${table}"
+    def rowCount = sql "select count(*) from ${table}"
     if (rowCount[0][0] != table_rows) {
         sql new File("""${context.file.parent}/ddl/${table}_delete.sql""").text
         sql "set global query_timeout=3600"

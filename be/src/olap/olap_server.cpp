@@ -26,17 +26,24 @@
 #include <string>
 
 #include "agent/cgroups_mgr.h"
+#include "common/config.h"
 #include "common/status.h"
 #include "gutil/strings/substitute.h"
+#include "io/cache/file_cache_manager.h"
 #include "olap/cumulative_compaction.h"
 #include "olap/olap_common.h"
 #include "olap/olap_define.h"
+#include "olap/rowset/beta_rowset_writer.h"
 #include "olap/storage_engine.h"
+#include "util/file_utils.h"
 #include "util/time.h"
 
 using std::string;
 
 namespace doris {
+
+using io::FileCacheManager;
+using io::Path;
 
 // number of running SCHEMA-CHANGE threads
 volatile uint32_t g_schema_change_active_threads = 0;
@@ -78,6 +85,12 @@ Status StorageEngine::start_bg_threads() {
             .set_min_threads(config::quick_compaction_max_threads)
             .set_max_threads(config::quick_compaction_max_threads)
             .build(&_quick_compaction_thread_pool);
+    if (config::enable_segcompaction && config::enable_storage_vectorization) {
+        ThreadPoolBuilder("SegCompactionTaskThreadPool")
+                .set_min_threads(config::seg_compaction_max_threads)
+                .set_max_threads(config::seg_compaction_max_threads)
+                .build(&_seg_compaction_thread_pool);
+    }
 
     // compaction tasks producer thread
     RETURN_IF_ERROR(Thread::create(
@@ -112,7 +125,7 @@ Status StorageEngine::start_bg_threads() {
             RETURN_IF_ERROR(Thread::create(
                     "StorageEngine", "path_scan_thread",
                     [this, data_dir]() {
-                        SCOPED_ATTACH_TASK(_mem_tracker, ThreadContext::TaskType::STORAGE);
+                        SCOPED_CONSUME_MEM_TRACKER(_mem_tracker);
                         this->_path_scan_thread_callback(data_dir);
                     },
                     &path_scan_thread));
@@ -122,7 +135,7 @@ Status StorageEngine::start_bg_threads() {
             RETURN_IF_ERROR(Thread::create(
                     "StorageEngine", "path_gc_thread",
                     [this, data_dir]() {
-                        SCOPED_ATTACH_TASK(_mem_tracker, ThreadContext::TaskType::STORAGE);
+                        SCOPED_CONSUME_MEM_TRACKER(_mem_tracker);
                         this->_path_gc_thread_callback(data_dir);
                     },
                     &path_gc_thread));
@@ -142,6 +155,12 @@ Status StorageEngine::start_bg_threads() {
             [this]() { this->_cooldown_tasks_producer_callback(); },
             &_cooldown_tasks_producer_thread));
     LOG(INFO) << "cooldown tasks producer thread started";
+
+    RETURN_IF_ERROR(Thread::create(
+            "StorageEngine", "cache_file_cleaner_tasks_producer_thread",
+            [this]() { this->_cache_file_cleaner_tasks_producer_callback(); },
+            &_cache_file_cleaner_tasks_producer_thread));
+    LOG(INFO) << "cache file cleaner tasks producer thread started";
 
     // add tablet publish version thread pool
     ThreadPoolBuilder("TabletPublishTxnThreadPool")
@@ -468,7 +487,6 @@ void StorageEngine::_compaction_tasks_producer_callback() {
 std::vector<TabletSharedPtr> StorageEngine::_generate_compaction_tasks(
         CompactionType compaction_type, std::vector<DataDir*>& data_dirs, bool check_score) {
     _update_cumulative_compaction_policy();
-
     std::vector<TabletSharedPtr> tablets_compaction;
     uint32_t max_compaction_score = 0;
 
@@ -477,7 +495,7 @@ std::vector<TabletSharedPtr> StorageEngine::_generate_compaction_tasks(
     std::shuffle(data_dirs.begin(), data_dirs.end(), g);
 
     // Copy _tablet_submitted_xxx_compaction map so that we don't need to hold _tablet_submitted_compaction_mutex
-    // when travesing the data dir
+    // when traversing the data dir
     std::map<DataDir*, std::unordered_set<TTabletId>> copied_cumu_map;
     std::map<DataDir*, std::unordered_set<TTabletId>> copied_base_map;
     {
@@ -523,11 +541,18 @@ std::vector<TabletSharedPtr> StorageEngine::_generate_compaction_tasks(
                             ? copied_cumu_map[data_dir]
                             : copied_base_map[data_dir],
                     &disk_max_score, _cumulative_compaction_policy);
-            if (tablet != nullptr) {
+            if (tablet != nullptr &&
+                !tablet->tablet_meta()->tablet_schema()->disable_auto_compaction()) {
                 if (need_pick_tablet) {
                     tablets_compaction.emplace_back(tablet);
                 }
                 max_compaction_score = std::max(max_compaction_score, disk_max_score);
+            } else if (tablet != nullptr &&
+                       tablet->tablet_meta()->tablet_schema()->disable_auto_compaction()) {
+                LOG_EVERY_N(INFO, 500)
+                        << "Tablet " << tablet->full_name()
+                        << " will be ignored by automatic compaction tasks since it's "
+                        << "set to disabled automatic compaction.";
             }
         }
     }
@@ -545,21 +570,9 @@ std::vector<TabletSharedPtr> StorageEngine::_generate_compaction_tasks(
 }
 
 void StorageEngine::_update_cumulative_compaction_policy() {
-    std::string current_policy = "";
-    {
-        std::lock_guard<std::mutex> lock(*config::get_mutable_string_config_lock());
-        current_policy = config::cumulative_compaction_policy;
-    }
-    boost::to_upper(current_policy);
-    if (_cumulative_compaction_policy == nullptr ||
-        _cumulative_compaction_policy->name() != current_policy) {
-        if (current_policy == CUMULATIVE_SIZE_BASED_POLICY) {
-            // check size_based cumulative compaction config
-            check_cumulative_compaction_config();
-        }
+    if (_cumulative_compaction_policy == nullptr) {
         _cumulative_compaction_policy =
-                CumulativeCompactionPolicyFactory::create_cumulative_compaction_policy(
-                        current_policy);
+                CumulativeCompactionPolicyFactory::create_cumulative_compaction_policy();
     }
 }
 
@@ -655,9 +668,7 @@ Status StorageEngine::_submit_compaction_task(TabletSharedPtr tablet,
 Status StorageEngine::submit_compaction_task(TabletSharedPtr tablet,
                                              CompactionType compaction_type) {
     _update_cumulative_compaction_policy();
-    if (tablet->get_cumulative_compaction_policy() == nullptr ||
-        tablet->get_cumulative_compaction_policy()->name() !=
-                _cumulative_compaction_policy->name()) {
+    if (tablet->get_cumulative_compaction_policy() == nullptr) {
         tablet->set_cumulative_compaction_policy(_cumulative_compaction_policy);
     }
     return _submit_compaction_task(tablet, compaction_type);
@@ -666,13 +677,34 @@ Status StorageEngine::submit_compaction_task(TabletSharedPtr tablet,
 Status StorageEngine::_handle_quick_compaction(TabletSharedPtr tablet) {
     CumulativeCompaction compact(tablet);
     compact.quick_rowsets_compact();
+    _pop_tablet_from_submitted_compaction(tablet, CompactionType::CUMULATIVE_COMPACTION);
     return Status::OK();
 }
 
 Status StorageEngine::submit_quick_compaction_task(TabletSharedPtr tablet) {
+    bool already_exist =
+            _push_tablet_into_submitted_compaction(tablet, CompactionType::CUMULATIVE_COMPACTION);
+    if (already_exist) {
+        return Status::AlreadyExist(
+                "compaction task has already been submitted, tablet_id={}, compaction_type={}.",
+                tablet->tablet_id(), CompactionType::CUMULATIVE_COMPACTION);
+    }
     _quick_compaction_thread_pool->submit_func(
             std::bind<void>(&StorageEngine::_handle_quick_compaction, this, tablet));
     return Status::OK();
+}
+
+Status StorageEngine::_handle_seg_compaction(BetaRowsetWriter* writer,
+                                             SegCompactionCandidatesSharedPtr segments) {
+    writer->compact_segments(segments);
+    // return OK here. error will be reported via BetaRowsetWriter::_segcompaction_status
+    return Status::OK();
+}
+
+Status StorageEngine::submit_seg_compaction_task(BetaRowsetWriter* writer,
+                                                 SegCompactionCandidatesSharedPtr segments) {
+    return _seg_compaction_thread_pool->submit_func(
+            std::bind<void>(&StorageEngine::_handle_seg_compaction, this, writer, segments));
 }
 
 void StorageEngine::_cooldown_tasks_producer_callback() {
@@ -734,6 +766,14 @@ void StorageEngine::_cooldown_tasks_producer_callback() {
                 LOG(INFO) << "failed to submit cooldown task, err msg: " << st.get_error_msg();
             }
         }
+    } while (!_stop_background_threads_latch.wait_for(std::chrono::seconds(interval)));
+}
+
+void StorageEngine::_cache_file_cleaner_tasks_producer_callback() {
+    int64_t interval = config::generate_cache_cleaner_task_interval_sec;
+    do {
+        LOG(INFO) << "Begin to Clean cache files";
+        FileCacheManager::instance()->gc_file_caches();
     } while (!_stop_background_threads_latch.wait_for(std::chrono::seconds(interval)));
 }
 

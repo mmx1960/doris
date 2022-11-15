@@ -28,6 +28,7 @@
 #include "gen_cpp/Types_types.h"
 #include "gen_cpp/internal_service.pb.h"
 #include "gutil/ref_counted.h"
+#include "gutil/walltime.h"
 #include "olap/lru_cache.h"
 #include "runtime/load_channel.h"
 #include "runtime/tablets_channel.h"
@@ -58,6 +59,16 @@ public:
     // cancel all tablet stream for 'load_id' load
     Status cancel(const PTabletWriterCancelRequest& request);
 
+    void refresh_mem_tracker() {
+        int64_t mem_usage = 0;
+        std::lock_guard<std::mutex> l(_lock);
+        for (auto& kv : _load_channels) {
+            mem_usage += kv.second->mem_consumption();
+        }
+        _mem_tracker->set_consumption(mem_usage);
+    }
+    MemTrackerLimiter* mem_tracker_set() { return _mem_tracker_set.get(); }
+
 private:
     template <typename Request>
     Status _get_load_channel(std::shared_ptr<LoadChannel>& channel, bool& is_eof,
@@ -78,7 +89,24 @@ protected:
     Cache* _last_success_channel = nullptr;
 
     // check the total load channel mem consumption of this Backend
-    std::shared_ptr<MemTrackerLimiter> _mem_tracker;
+    std::unique_ptr<MemTracker> _mem_tracker;
+    // Associate load channel tracker and memtable tracker, avoid default association to Orphan tracker.
+    std::unique_ptr<MemTrackerLimiter> _mem_tracker_set;
+    int64_t _load_hard_mem_limit = -1;
+    int64_t _load_soft_mem_limit = -1;
+    // By default, we try to reduce memory on the load channel with largest mem consumption,
+    // but if there are lots of small load channel, even the largest one consumes very
+    // small memory, in this case we need to pick multiple load channels to reduce memory
+    // more effectively.
+    // `_load_channel_min_mem_to_reduce` is used to determine whether the largest load channel's
+    // memory consumption is big enough.
+    int64_t _load_channel_min_mem_to_reduce = -1;
+    bool _soft_reduce_mem_in_progress = false;
+
+    // If hard limit reached, one thread will trigger load channel flush,
+    // other threads should wait on the condition variable.
+    bool _should_wait_flush = false;
+    std::condition_variable _wait_flush_cond;
 
     CountDownLatch _stop_background_threads_latch;
     // thread to clean timeout load channels
@@ -131,7 +159,11 @@ Status LoadChannelMgr::add_batch(const TabletWriterAddRequest& request,
     // 3. add batch to load channel
     // batch may not exist in request(eg: eos request without batch),
     // this case will be handled in load channel's add batch method.
-    RETURN_IF_ERROR(channel->add_batch(request, response));
+    Status st = channel->add_batch(request, response);
+    if (UNLIKELY(!st.ok())) {
+        channel->cancel();
+        return st;
+    }
 
     // 4. handle finish
     if (channel->is_finished()) {

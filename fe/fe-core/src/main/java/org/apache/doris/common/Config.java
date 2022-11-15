@@ -255,6 +255,15 @@ public class Config extends ConfigBase {
     public static int bdbje_replica_ack_timeout_second = 10;
 
     /**
+     * The desired upper limit on the number of bytes of reserved space to
+     * retain in a replicated JE Environment.
+     * You only need to decrease this value if your FE meta disk is really small.
+     * And don't need to increase this value.
+     */
+    @ConfField
+    public static int bdbje_reserved_disk_bytes = 1 * 1024 * 1024 * 1024; // 1G
+
+    /**
      * num of thread to handle heartbeat events in heartbeat_mgr.
      */
     @ConfField(masterOnly = true)
@@ -401,11 +410,6 @@ public class Config extends ConfigBase {
     @ConfField public static int query_port = 9030;
 
     /**
-     * mysql service nio option.
-     */
-    @ConfField public static boolean mysql_service_nio_enabled = true;
-
-    /**
      * num of thread to handle io events in mysql.
      */
     @ConfField public static int mysql_service_io_threads_num = 4;
@@ -446,7 +450,7 @@ public class Config extends ConfigBase {
      * In order not to wait too long for create table(index), set a max timeout.
      */
     @ConfField(mutable = true, masterOnly = true)
-    public static int max_create_table_timeout_second = 60;
+    public static int max_create_table_timeout_second = 3600;
 
     /**
      * Maximal waiting time for all publish version tasks of one transaction to be finished
@@ -568,7 +572,7 @@ public class Config extends ConfigBase {
      * Default stream load and streaming mini load timeout
      */
     @ConfField(mutable = true, masterOnly = true)
-    public static int stream_load_default_timeout_second = 600; // 600s
+    public static int stream_load_default_timeout_second = 86400 * 3; // 3days
 
     /**
      * Default stream load pre-commit status timeout
@@ -744,6 +748,7 @@ public class Config extends ConfigBase {
      * this config has been replaced by async_loading_load_task_pool_size,
      * it will be removed in the future.
      */
+    @Deprecated
     @ConfField(mutable = false, masterOnly = true)
     public static int async_load_task_pool_size = 10;
 
@@ -797,7 +802,7 @@ public class Config extends ConfigBase {
      * Maximal timeout of ALTER TABLE request. Set long enough to fit your table data size.
      */
     @ConfField(mutable = true, masterOnly = true)
-    public static int alter_table_timeout_second = 86400; // 1day
+    public static int alter_table_timeout_second = 86400 * 30; // 1month
     /**
      * If a backend is down for *max_backend_down_time_second*, a BACKEND_DOWN event will be triggered.
      * Do not set this if you know what you are doing.
@@ -1018,11 +1023,6 @@ public class Config extends ConfigBase {
     // update interval of tablet stat
     // All frontends will get tablet stat from all backends at each interval
     @ConfField public static int tablet_stat_update_interval_second = 60;  // 1 min
-
-    /**
-     * if set to false, auth check will be disable, in case some goes wrong with the new privilege system.
-     */
-    @ConfField public static boolean enable_auth_check = true;
 
     /**
      * Max bytes a broker scanner can process in one broker load job.
@@ -1315,18 +1315,6 @@ public class Config extends ConfigBase {
     public static boolean drop_backend_after_decommission = true;
 
     /**
-     * enable spark load for temporary use
-     */
-    @ConfField(mutable = true, masterOnly = true)
-    public static boolean enable_spark_load = true;
-
-    /**
-     * enable use odbc table
-     */
-    @ConfField(mutable = true, masterOnly = true)
-    public static boolean enable_odbc_table = true;
-
-    /**
      * Define thrift server's server model, default is TThreadPoolServer model
      */
     @ConfField
@@ -1487,6 +1475,14 @@ public class Config extends ConfigBase {
     public static int max_dynamic_partition_num = 500;
 
     /**
+     * Used to limit the maximum number of partitions that can be created when creating multi partition,
+     * to avoid creating too many partitions at one time.
+     * The number is determined by "start" and "end" in the multi partition parameters.
+     */
+    @ConfField(mutable = true, masterOnly = true)
+    public static int max_multi_partition_num = 4096;
+
+    /**
      * Control the max num of backup/restore job per db
      */
     @ConfField(mutable = true, masterOnly = true)
@@ -1578,7 +1574,7 @@ public class Config extends ConfigBase {
 
     /*
      * If set to true, when creating table, Doris will allow to locate replicas of a tablet
-     * on same host. And also the tablet repair and balance will be disabled.
+     * on same host.
      * This is only for local test, so that we can deploy multi BE on same host and create table
      * with multi replicas.
      * DO NOT use it for production env.
@@ -1629,7 +1625,7 @@ public class Config extends ConfigBase {
      */
     // TODO change it to mutable true
     @ConfField(mutable = false, masterOnly = true)
-    public static int cbo_concurrency_statistics_task_num = 1;
+    public static int cbo_concurrency_statistics_task_num = 10;
     /*
      * default sample percentage
      * The value from 0 ~ 100. The 100 means no sampling and fetch all data.
@@ -1676,7 +1672,7 @@ public class Config extends ConfigBase {
     public static boolean enable_quantile_state_type = false;
 
     @ConfField
-    public static boolean enable_vectorized_load = false;
+    public static boolean enable_vectorized_load = true;
 
     @ConfField(mutable = false, masterOnly = true)
     public static int backend_rpc_timeout_ms = 60000; // 1 min
@@ -1685,8 +1681,8 @@ public class Config extends ConfigBase {
      * Temp config for multi catalog feature.
      * Should be removed when this feature is ready.
      */
-    @ConfField(mutable = false, masterOnly = true)
-    public static boolean enable_multi_catalog = false; // 1 min
+    @ConfField(mutable = true, masterOnly = true)
+    public static boolean enable_multi_catalog = false;
 
     @ConfField(mutable = true, masterOnly = false)
     public static long file_scan_node_split_size = 256 * 1024 * 1024; // 256mb
@@ -1738,4 +1734,194 @@ public class Config extends ConfigBase {
      */
     @ConfField(mutable = true, masterOnly = true)
     public static boolean enable_array_type = false;
+
+    /**
+     * Use new fe generate es dsl.
+     */
+    @ConfField(mutable = true)
+    public static boolean enable_new_es_dsl = true;
+
+    /**
+     * The timeout of executing async remote fragment.
+     * In normal case, the async remote fragment will be executed in a short time. If system are under high load
+     * condition，try to set this timeout longer.
+     */
+    @ConfField(mutable = true)
+    public static long remote_fragment_exec_timeout_ms = 5000; // 5 sec
+
+    /**
+     * Temp config, should be removed when new file scan node is ready.
+     */
+    @ConfField(mutable = true)
+    public static boolean enable_new_load_scan_node = false;
+
+    /**
+     * Max data version of backends serialize block.
+     */
+    @ConfField(mutable = false)
+    public static int max_be_exec_version = 1;
+
+    /**
+     * Min data version of backends serialize block.
+     */
+    @ConfField(mutable = false)
+    public static int min_be_exec_version = 0;
+
+    /**
+     * Data version of backends serialize block.
+     */
+    @ConfField(mutable = true, masterOnly = true)
+    public static int be_exec_version = max_be_exec_version;
+
+    @ConfField(mutable = false)
+    public static int statistic_job_scheduler_execution_interval_ms = 1000;
+
+    @ConfField(mutable = false)
+    public static int statistic_task_scheduler_execution_interval_ms = 1000;
+
+    /*
+     * mtmv scheduler framework is still under dev, remove this config when it is graduate.
+     */
+    @ConfField(mutable = true)
+    public static boolean enable_mtmv_scheduler_framework = false;
+
+    /* Max running task num at the same time, otherwise the submitted task will still be keep in pending poll*/
+    @ConfField(mutable = true, masterOnly = true)
+    public static int max_running_mtmv_scheduler_task_num = 100;
+
+    /* Max pending task num keep in pending poll, otherwise it reject the task submit*/
+    @ConfField(mutable = true, masterOnly = true)
+    public static int max_pending_mtmv_scheduler_task_num = 100;
+
+    /* Remove the completed mtmv job after this expired time. */
+    @ConfField(mutable = true, masterOnly = true)
+    public static long scheduler_mtmv_job_expired = 24 * 60 * 60L; // 1day
+
+    /* Remove the finished mtmv task after this expired time. */
+    @ConfField(mutable = true, masterOnly = true)
+    public static long scheduler_mtmv_task_expired = 24 * 60 * 60L; // 1day
+
+    /**
+     * The candidate of the backend node for federation query such as hive table and es table query.
+     * If the backend of computation role is less than this value, it will acquire some mix backend.
+     * If the computation backend is enough, federation query will only assign to computation backend.
+     */
+    @ConfField(mutable = true, masterOnly = false)
+    public static int backend_num_for_federation = 3;
+
+    /**
+     * Max query profile num.
+     */
+    @ConfField(mutable = true, masterOnly = false)
+    public static int max_query_profile_num = 100;
+
+    /**
+     * Set to true to disable backend black list, so that even if we failed to send task to a backend,
+     * that backend won't be added to black list.
+     * This should only be set when running tests, such as regression test.
+     * Highly recommended NOT disable it in product environment.
+     */
+    @ConfField(mutable = true, masterOnly = false)
+    public static boolean disable_backend_black_list = false;
+
+    /**
+     * Maximum backend heartbeat failure tolerance count.
+     * Default is 1, which means if 1 heart failed, the backend will be marked as dead.
+     * A larger value can improve the tolerance of the cluster to occasional heartbeat failures.
+     * For example, when running regression tests, this value can be increased.
+     */
+    @ConfField(mutable = true, masterOnly = true)
+    public static long max_backend_heartbeat_failure_tolerance_count = 1;
+
+    /**
+     * The iceberg and hudi table will be removed in v1.3
+     * Use multi catalog instead.
+     */
+    @ConfField(mutable = true, masterOnly = false)
+    public static boolean disable_iceberg_hudi_table = true;
+
+    /**
+     * The default connection timeout for hive metastore.
+     * hive.metastore.client.socket.timeout
+     */
+    @ConfField(mutable = true, masterOnly = false)
+    public static long hive_metastore_client_timeout_second = 10;
+
+    @ConfField(mutable = false)
+    public static int statistic_table_bucket_count = 7;
+
+    @ConfField
+    public static long statistics_max_mem_per_query_in_bytes = 2L * 1024 * 1024 * 1024;
+
+    @ConfField
+    public static int statistic_parallel_exec_instance_num = 1;
+
+    @ConfField
+    public static int statistics_simultaneously_running_job_num = 10;
+
+    @ConfField
+    public static int statistic_internal_table_replica_num = 1;
+
+    @ConfField
+    public static int statistic_clean_interval_in_hours = 24 * 2;
+
+    @ConfField
+    public static int statistics_stale_statistics_fetch_size = 1000;
+
+    @ConfField
+    public static int statistics_outdated_record_detector_running_interval_in_minutes = 5;
+
+    @ConfField
+    public static int statistics_records_outdated_time_in_ms = 2 * 24 * 3600 * 1000;
+
+    @ConfField
+    public static int statistics_job_execution_timeout_in_min = 5;
+
+    @ConfField
+    public static int statistics_table_creation_retry_interval_in_seconds = 5;
+
+    @ConfField
+    public static int statistics_cache_max_size = 100000;
+
+    @ConfField
+    public static int statistics_cache_valid_duration_in_hours = 24 * 2;
+
+    @ConfField
+    public static int statistics_cache_refresh_interval = 24 * 2;
+
+    /**
+     * if table has too many replicas, Fe occur oom when schema change.
+     * 10W replicas is a reasonable value for testing.
+     */
+    @ConfField(mutable = true, masterOnly = true)
+    public static long max_replica_count_when_schema_change = 100000;
+
+    /**
+     * Max cache num of hive partition.
+     * Decrease this value if FE's memory is small
+     */
+    @ConfField(mutable = false, masterOnly = false)
+    public static long max_hive_partition_cache_num = 100000;
+
+    /**
+     * Max cache num of external catalog's file
+     * Decrease this value if FE's memory is small
+     */
+    @ConfField(mutable = false, masterOnly = false)
+    public static long max_external_file_cache_num = 100000;
+
+    /**
+     * Max cache num of external table's schema
+     * Decrease this value if FE's memory is small
+     */
+    @ConfField(mutable = false, masterOnly = false)
+    public static long max_external_schema_cache_num = 10000;
+
+    /**
+     * The expiration time of a cache object after last access of it.
+     * For external schema cache and hive meta cache.
+     */
+    @ConfField(mutable = false, masterOnly = false)
+    public static long external_cache_expire_time_minutes_after_access = 24 * 60; // 1 day
 }
+

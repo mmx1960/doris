@@ -26,9 +26,9 @@ under the License.
 
 # Contribute to Doris
 
-Thank you very much for your interest in the Doris project. We welcome your suggestions, comments (including criticisms), comments and contributions to the Doris project.
+Thank you very much for your interest in the Doris project. We welcome your suggestions, comments (including criticisms) and contributions to the Doris project.
 
-Your suggestions, comments and comments on Doris can be made directly through GitHub's [Issues](https://github.com/apache/doris/issues/new/choose).
+Your suggestions, comments and contributions on Doris can be made directly through GitHub's [Issues](https://github.com/apache/doris/issues/new/choose).
 
 There are many ways to participate in and contribute to Doris projects: code implementation, test writing, process tool improvement, document improvement, and so on. Any contribution will be welcomed and you will be added to the list of contributors. Further, with sufficient contributions, you will have the opportunity to become a Committer of Apache with Apache mailbox and be included in the list of [Apache Committers](http://people.apache.org/committer-index.html).
 
@@ -39,7 +39,7 @@ Any questions, you can contact us to get timely answers, including Wechat, Gitte
 For the first time in Doris community, you can:
 
 * Follow [Doris Github](https://github.com/apache/doris)
-* Subscribe to our [mailing list](./subscribe-mail-list);
+* Subscribe to our [mailing list](../subscribe-mail-list);
 * Join Doris Wechat Group (add WeChat-ID: morningman-cmy, note: join Doris Group) and ask questions at any time.
 * Enter Doris's [Slack](https://join.slack.com/t/apachedoriscommunity/shared_invite/zt-11jb8gesh-7IukzSrdea6mqoG0HB4gZg)
 
