@@ -51,6 +51,7 @@ public abstract class Type {
 
     // Static constant types for scalar types that don't require additional information.
     public static final ScalarType INVALID = new ScalarType(PrimitiveType.INVALID_TYPE);
+    public static final ScalarType UNSUPPORTED = new ScalarType(PrimitiveType.UNSUPPORTED);
     public static final ScalarType NULL = new ScalarType(PrimitiveType.NULL_TYPE);
     public static final ScalarType BOOLEAN = new ScalarType(PrimitiveType.BOOLEAN);
     public static final ScalarType TINYINT = new ScalarType(PrimitiveType.TINYINT);
@@ -65,9 +66,9 @@ public abstract class Type {
     public static final ScalarType DATEV2 = new ScalarType(PrimitiveType.DATEV2);
     public static final ScalarType TIMEV2 = new ScalarType(PrimitiveType.TIMEV2);
     public static final ScalarType TIME = new ScalarType(PrimitiveType.TIME);
-    public static final ScalarType STRING = new ScalarType(PrimitiveType.STRING);
+    public static final ScalarType STRING = ScalarType.createStringType();
     public static final ScalarType DEFAULT_DECIMALV2 = ScalarType.createDecimalType(PrimitiveType.DECIMALV2,
-                    ScalarType.DEFAULT_PRECISION, ScalarType.DEFAULT_SCALE);
+            ScalarType.DEFAULT_PRECISION, ScalarType.DEFAULT_SCALE);
 
     public static final ScalarType MAX_DECIMALV2_TYPE = ScalarType.createDecimalType(PrimitiveType.DECIMALV2,
             ScalarType.MAX_DECIMALV2_PRECISION, ScalarType.MAX_DECIMALV2_SCALE);
@@ -108,6 +109,7 @@ public abstract class Type {
     private static final Logger LOG = LogManager.getLogger(Type.class);
     private static final ArrayList<ScalarType> integerTypes;
     private static final ArrayList<ScalarType> numericTypes;
+    private static final ArrayList<ScalarType> numericDateTimeTypes;
     private static final ArrayList<ScalarType> supportedTypes;
     private static final ArrayList<Type> arraySubTypes;
     private static final ArrayList<ScalarType> trivialTypes;
@@ -129,6 +131,11 @@ public abstract class Type {
         numericTypes.add(DECIMAL64);
         numericTypes.add(DECIMAL128);
 
+        numericDateTimeTypes = Lists.newArrayList();
+        numericDateTimeTypes.add(DATE);
+        numericDateTimeTypes.add(DATETIME);
+        numericDateTimeTypes.addAll(numericTypes);
+
         trivialTypes = Lists.newArrayList();
         trivialTypes.addAll(numericTypes);
         trivialTypes.add(BOOLEAN);
@@ -142,6 +149,9 @@ public abstract class Type {
         trivialTypes.add(TIME);
         trivialTypes.add(TIMEV2);
         trivialTypes.add(JSONB);
+        trivialTypes.add(DECIMAL32);
+        trivialTypes.add(DECIMAL64);
+        trivialTypes.add(DECIMAL128);
 
         supportedTypes = Lists.newArrayList();
         supportedTypes.addAll(trivialTypes);
@@ -171,6 +181,10 @@ public abstract class Type {
 
     public static ArrayList<ScalarType> getNumericTypes() {
         return numericTypes;
+    }
+
+    public static ArrayList<ScalarType> getNumericDateTimeTypes() {
+        return numericDateTimeTypes;
     }
 
     public static ArrayList<ScalarType> getTrivialTypes() {
@@ -351,7 +365,7 @@ public abstract class Type {
 
     public boolean isDateType() {
         return isScalarType(PrimitiveType.DATE) || isScalarType(PrimitiveType.DATETIME)
-            || isScalarType(PrimitiveType.DATEV2) || isScalarType(PrimitiveType.DATETIMEV2);
+                || isScalarType(PrimitiveType.DATEV2) || isScalarType(PrimitiveType.DATETIMEV2);
     }
 
     public boolean isDatetime() {
@@ -606,7 +620,7 @@ public abstract class Type {
      * Helper for exceedsMaxNestingDepth(). Recursively computes the max nesting depth,
      * terminating early if MAX_NESTING_DEPTH is reached. Returns true if this type
      * exceeds the MAX_NESTING_DEPTH, false otherwise.
-     *
+     * <p>
      * Examples of types and their nesting depth:
      * INT --> 1
      * STRUCT<f1:INT> --> 2
@@ -762,7 +776,7 @@ public abstract class Type {
                 } else if (scalarType.getType() == TPrimitiveType.DECIMALV2
                         || scalarType.getType() == TPrimitiveType.DECIMAL32
                         || scalarType.getType() == TPrimitiveType.DECIMAL64
-                        || scalarType.getType() == TPrimitiveType.DECIMAL128) {
+                        || scalarType.getType() == TPrimitiveType.DECIMAL128I) {
                     Preconditions.checkState(scalarType.isSetPrecision()
                             && scalarType.isSetPrecision());
                     type = ScalarType.createDecimalType(scalarType.getPrecision(),
@@ -1001,7 +1015,7 @@ public abstract class Type {
      * of the assignment-compatible type. For strict compatibility, this can be done
      * without any loss of precision. For non-strict compatibility, there may be loss of
      * precision, e.g. if converting from BIGINT to FLOAT.
-     *
+     * <p>
      * We chose not to follow MySQL's type casting behavior as described here:
      * http://dev.mysql.com/doc/refman/5.0/en/type-conversion.html
      * for the following reasons:
@@ -1406,7 +1420,6 @@ public abstract class Type {
         compatibilityMatrix[DECIMAL128.ordinal()][DECIMAL32.ordinal()] = PrimitiveType.DECIMAL128;
         compatibilityMatrix[DECIMAL128.ordinal()][DECIMAL64.ordinal()] = PrimitiveType.DECIMAL128;
 
-
         // HLL
         compatibilityMatrix[HLL.ordinal()][TIME.ordinal()] = PrimitiveType.INVALID_TYPE;
         compatibilityMatrix[HLL.ordinal()][TIMEV2.ordinal()] = PrimitiveType.INVALID_TYPE;
@@ -1442,7 +1455,6 @@ public abstract class Type {
         compatibilityMatrix[QUANTILE_STATE.ordinal()][DECIMAL64.ordinal()] = PrimitiveType.INVALID_TYPE;
         compatibilityMatrix[QUANTILE_STATE.ordinal()][DECIMAL128.ordinal()] = PrimitiveType.INVALID_TYPE;
 
-
         // TIME why here not???
         compatibilityMatrix[TIME.ordinal()][TIME.ordinal()] = PrimitiveType.INVALID_TYPE;
         compatibilityMatrix[TIME.ordinal()][TIMEV2.ordinal()] = PrimitiveType.INVALID_TYPE;
@@ -1472,7 +1484,8 @@ public abstract class Type {
                         || t1 == PrimitiveType.TIME || t2 == PrimitiveType.TIME
                         || t1 == PrimitiveType.TIMEV2 || t2 == PrimitiveType.TIMEV2
                         || t1 == PrimitiveType.MAP || t2 == PrimitiveType.MAP
-                        || t1 == PrimitiveType.STRUCT || t2 == PrimitiveType.STRUCT) {
+                        || t1 == PrimitiveType.STRUCT || t2 == PrimitiveType.STRUCT
+                        || t1 == PrimitiveType.UNSUPPORTED || t2 == PrimitiveType.UNSUPPORTED) {
                     continue;
                 }
                 Preconditions.checkNotNull(compatibilityMatrix[i][j]);
@@ -1496,17 +1509,15 @@ public abstract class Type {
             case DATE:
             case DATEV2:
             case DATETIME:
+            case DATETIMEV2:
             case TIME:
+            case TIMEV2:
             case CHAR:
             case VARCHAR:
             case HLL:
             case BITMAP:
             case QUANTILE_STATE:
                 return VARCHAR;
-            case DATETIMEV2:
-                return DEFAULT_DATETIMEV2;
-            case TIMEV2:
-                return DEFAULT_TIMEV2;
             case DECIMALV2:
                 return DECIMALV2;
             case DECIMAL32:
@@ -1564,7 +1575,7 @@ public abstract class Type {
         // int family type and char family type should cast to char family type
         if ((t1ResultType.isFixedPointType() && t2ResultType.isCharFamily())
                 || (t2ResultType.isFixedPointType() && t1ResultType.isCharFamily())) {
-            return t1.isStringType() ?  t1 : t2;
+            return t1.isStringType() ? t1 : t2;
         }
 
         if (t1ResultType == PrimitiveType.BIGINT && t2ResultType == PrimitiveType.BIGINT) {

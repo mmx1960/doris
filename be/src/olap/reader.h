@@ -19,6 +19,7 @@
 
 #include <thrift/protocol/TDebugProtocol.h>
 
+#include "exprs/bitmapfilter_predicate.h"
 #include "exprs/bloomfilter_predicate.h"
 #include "exprs/function_filter.h"
 #include "exprs/hybrid_set.h"
@@ -33,13 +34,12 @@ namespace doris {
 
 class Tablet;
 class RowCursor;
-class RowBlock;
-class CollectIterator;
 class RuntimeState;
 
 namespace vectorized {
 class VCollectIterator;
 class Block;
+class VExpr;
 } // namespace vectorized
 
 class TabletReader {
@@ -62,11 +62,8 @@ public:
         bool direct_mode = false;
         bool aggregation = false;
         bool need_agg_finalize = true;
-        // 1. when read column data page:
-        //     for compaction, schema_change, check_sum: we don't use page cache
-        //     for query and config::disable_storage_page_cache is false, we use page cache
-        // 2. when read column index page
-        //     if config::disable_storage_page_cache is false, we use page cache
+        // for compaction, schema_change, check_sum: we don't use page cache
+        // for query and config::disable_storage_page_cache is false, we use page cache
         bool use_page_cache = false;
         Version version = Version(-1, 0);
 
@@ -77,7 +74,9 @@ public:
 
         std::vector<TCondition> conditions;
         std::vector<std::pair<string, std::shared_ptr<BloomFilterFuncBase>>> bloom_filters;
+        std::vector<std::pair<string, std::shared_ptr<BitmapFilterFuncBase>>> bitmap_filters;
         std::vector<std::pair<string, std::shared_ptr<HybridSetBase>>> in_filters;
+        std::vector<TCondition> conditions_except_leafnode_of_andnode;
         std::vector<FunctionFilter> function_filters;
         std::vector<RowsetMetaSharedPtr> delete_predicates;
 
@@ -93,15 +92,21 @@ public:
         std::vector<uint32_t>* origin_return_columns = nullptr;
         std::unordered_set<uint32_t>* tablet_columns_convert_to_null_set = nullptr;
         TPushAggOp::type push_down_agg_type_opt = TPushAggOp::NONE;
+        vectorized::VExpr* remaining_vconjunct_root = nullptr;
 
         // used for compaction to record row ids
         bool record_rowids = false;
+        // flag for enable topn opt
+        bool use_topn_opt = false;
         // used for special optimization for query : ORDER BY key LIMIT n
         bool read_orderby_key = false;
         // used for special optimization for query : ORDER BY key DESC LIMIT n
         bool read_orderby_key_reverse = false;
         // num of columns for orderby key
         size_t read_orderby_key_num_prefix_columns = 0;
+
+        // for vertical compaction
+        bool is_key_column_group = false;
 
         void check_validation() const;
 
@@ -118,24 +123,17 @@ public:
     // Initialize TabletReader with tablet, data version and fetch range.
     virtual Status init(const ReaderParams& read_params);
 
-    // Read next row with aggregation.
-    // Return OLAP_SUCCESS and set `*eof` to false when next row is read into `row_cursor`.
-    // Return OLAP_SUCCESS and set `*eof` to true when no more rows can be read.
-    // Return others when unexpected error happens.
-    virtual Status next_row_with_aggregation(RowCursor* row_cursor, MemPool* mem_pool,
-                                             ObjectPool* agg_pool, bool* eof) = 0;
-
     // Read next block with aggregation.
-    // Return OLAP_SUCCESS and set `*eof` to false when next block is read
-    // Return OLAP_SUCCESS and set `*eof` to true when no more rows can be read.
+    // Return OK and set `*eof` to false when next block is read
+    // Return OK and set `*eof` to true when no more rows can be read.
     // Return others when unexpected error happens.
     // TODO: Rethink here we still need mem_pool and agg_pool?
     virtual Status next_block_with_aggregation(vectorized::Block* block, MemPool* mem_pool,
                                                ObjectPool* agg_pool, bool* eof) {
-        return Status::OLAPInternalError(OLAP_ERR_READER_INITIALIZE_ERROR);
+        return Status::Error<ErrorCode::READER_INITIALIZE_ERROR>();
     }
 
-    uint64_t merged_rows() const { return _merged_rows; }
+    virtual uint64_t merged_rows() const { return _merged_rows; }
 
     uint64_t filtered_rows() const {
         return _stats.rows_del_filtered + _stats.rows_del_by_bitmap +
@@ -149,9 +147,12 @@ public:
     OlapReaderStatistics* mutable_stats() { return &_stats; }
 
     virtual bool update_profile(RuntimeProfile* profile) { return false; }
+    static Status init_reader_params_and_create_block(
+            TabletSharedPtr tablet, ReaderType reader_type,
+            const std::vector<RowsetSharedPtr>& input_rowsets,
+            TabletReader::ReaderParams* reader_params, vectorized::Block* block);
 
 protected:
-    friend class CollectIterator;
     friend class vectorized::VCollectIterator;
     friend class DeleteHandler;
 
@@ -168,8 +169,13 @@ protected:
 
     void _init_conditions_param(const ReaderParams& read_params);
 
+    void _init_conditions_param_except_leafnode_of_andnode(const ReaderParams& read_params);
+
     ColumnPredicate* _parse_to_predicate(
             const std::pair<std::string, std::shared_ptr<BloomFilterFuncBase>>& bloom_filter);
+
+    ColumnPredicate* _parse_to_predicate(
+            const std::pair<std::string, std::shared_ptr<BitmapFilterFuncBase>>& bitmap_filter);
 
     ColumnPredicate* _parse_to_predicate(
             const std::pair<std::string, std::shared_ptr<HybridSetBase>>& in_filter);
@@ -199,6 +205,7 @@ protected:
     std::vector<bool> _is_lower_keys_included;
     std::vector<bool> _is_upper_keys_included;
     std::vector<ColumnPredicate*> _col_predicates;
+    std::vector<ColumnPredicate*> _col_preds_except_leafnode_of_andnode;
     std::vector<ColumnPredicate*> _value_col_predicates;
     DeleteHandler _delete_handler;
 

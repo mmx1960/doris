@@ -444,7 +444,7 @@ public class InsertStmt extends DdlStmt {
          */
         List<Pair<Integer, Column>> origColIdxsForExtendCols = Lists.newArrayList();
         for (Column column : targetTable.getFullSchema()) {
-            if (column.isNameWithPrefix(SchemaChangeHandler.SHADOW_NAME_PRFIX)) {
+            if (column.isNameWithPrefix(SchemaChangeHandler.SHADOW_NAME_PREFIX)) {
                 String origName = Column.removeNamePrefix(column.getName());
                 for (int i = 0; i < targetColumns.size(); i++) {
                     if (targetColumns.get(i).nameEquals(origName, false)) {
@@ -681,7 +681,12 @@ public class InsertStmt extends DdlStmt {
             if (exprByName.containsKey(col.getName())) {
                 resultExprs.add(exprByName.get(col.getName()));
             } else {
-                if (col.getDefaultValue() == null) {
+                // process sequence col, map sequence column to other column
+                if (targetTable instanceof OlapTable && ((OlapTable) targetTable).hasSequenceCol()
+                        && col.getName().equals(Column.SEQUENCE_COL)
+                        && ((OlapTable) targetTable).getSequenceMapCol() != null) {
+                    resultExprs.add(exprByName.get(((OlapTable) targetTable).getSequenceMapCol()));
+                } else if (col.getDefaultValue() == null) {
                     /*
                     The import stmt has been filtered in function checkColumnCoverage when
                         the default value of column is null and column is not nullable.

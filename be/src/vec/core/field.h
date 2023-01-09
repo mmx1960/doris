@@ -40,6 +40,36 @@ struct NearestFieldTypeImpl;
 template <typename T>
 using NearestFieldType = typename NearestFieldTypeImpl<T>::Type;
 
+template <typename T>
+struct AvgNearestFieldTypeTrait {
+    using Type = typename NearestFieldTypeImpl<T>::Type;
+};
+
+template <>
+struct AvgNearestFieldTypeTrait<Decimal32> {
+    using Type = Decimal128I;
+};
+
+template <>
+struct AvgNearestFieldTypeTrait<Decimal64> {
+    using Type = Decimal128I;
+};
+
+template <>
+struct AvgNearestFieldTypeTrait<Decimal128> {
+    using Type = Decimal128;
+};
+
+template <>
+struct AvgNearestFieldTypeTrait<Decimal128I> {
+    using Type = Decimal128;
+};
+
+template <>
+struct AvgNearestFieldTypeTrait<Int64> {
+    using Type = double;
+};
+
 class Field;
 using FieldVector = std::vector<Field>;
 
@@ -277,6 +307,7 @@ public:
             Decimal128 = 21,
             AggregateFunctionState = 22,
             JSONB = 23,
+            Decimal128I = 24,
         };
 
         static const int MIN_NON_POD = 16;
@@ -309,6 +340,8 @@ public:
                 return "Decimal64";
             case Decimal128:
                 return "Decimal128";
+            case Decimal128I:
+                return "Decimal128I";
             case AggregateFunctionState:
                 return "AggregateFunctionState";
             case FixedLengthObject:
@@ -327,10 +360,14 @@ public:
     struct EnumToType;
 
     static bool is_decimal(Types::Which which) {
-        return which >= Types::Decimal32 && which <= Types::Decimal128;
+        return (which >= Types::Decimal32 && which <= Types::Decimal128) ||
+               which == Types::Decimal128I;
     }
 
     Field() : which(Types::Null) {}
+
+    // set Types::Null explictly and avoid other types
+    Field(Types::Which w) : which(w) { DCHECK_EQ(Types::Null, which); }
 
     /** Despite the presence of a template constructor, this constructor is still needed,
       *  since, in its absence, the compiler will still generate the default constructor.
@@ -477,6 +514,8 @@ public:
             return get<DecimalField<Decimal64>>() < rhs.get<DecimalField<Decimal64>>();
         case Types::Decimal128:
             return get<DecimalField<Decimal128>>() < rhs.get<DecimalField<Decimal128>>();
+        case Types::Decimal128I:
+            return get<DecimalField<Decimal128I>>() < rhs.get<DecimalField<Decimal128I>>();
         case Types::AggregateFunctionState:
             return get<AggregateFunctionStateData>() < rhs.get<AggregateFunctionStateData>();
         case Types::FixedLengthObject:
@@ -520,6 +559,8 @@ public:
             return get<DecimalField<Decimal64>>() <= rhs.get<DecimalField<Decimal64>>();
         case Types::Decimal128:
             return get<DecimalField<Decimal128>>() <= rhs.get<DecimalField<Decimal128>>();
+        case Types::Decimal128I:
+            return get<DecimalField<Decimal128I>>() <= rhs.get<DecimalField<Decimal128I>>();
         case Types::AggregateFunctionState:
             return get<AggregateFunctionStateData>() <= rhs.get<AggregateFunctionStateData>();
         case Types::FixedLengthObject:
@@ -559,6 +600,8 @@ public:
             return get<DecimalField<Decimal64>>() == rhs.get<DecimalField<Decimal64>>();
         case Types::Decimal128:
             return get<DecimalField<Decimal128>>() == rhs.get<DecimalField<Decimal128>>();
+        case Types::Decimal128I:
+            return get<DecimalField<Decimal128I>>() == rhs.get<DecimalField<Decimal128I>>();
         case Types::AggregateFunctionState:
             return get<AggregateFunctionStateData>() == rhs.get<AggregateFunctionStateData>();
         case Types::FixedLengthObject:
@@ -574,7 +617,7 @@ private:
     std::aligned_union_t<DBMS_MIN_FIELD_SIZE - sizeof(Types::Which), Null, UInt64, UInt128, Int64,
                          Int128, Float64, String, JsonbField, Array, Tuple, DecimalField<Decimal32>,
                          DecimalField<Decimal64>, DecimalField<Decimal128>,
-                         AggregateFunctionStateData>
+                         DecimalField<Decimal128I>, AggregateFunctionStateData>
             storage;
 
     Types::Which which;
@@ -645,6 +688,9 @@ private:
             return;
         case Types::Decimal128:
             f(field.template get<DecimalField<Decimal128>>());
+            return;
+        case Types::Decimal128I:
+            f(field.template get<DecimalField<Decimal128I>>());
             return;
         case Types::AggregateFunctionState:
             f(field.template get<AggregateFunctionStateData>());
@@ -779,6 +825,10 @@ struct Field::TypeToEnum<DecimalField<Decimal128>> {
     static const Types::Which value = Types::Decimal128;
 };
 template <>
+struct Field::TypeToEnum<DecimalField<Decimal128I>> {
+    static const Types::Which value = Types::Decimal128I;
+};
+template <>
 struct Field::TypeToEnum<AggregateFunctionStateData> {
     static const Types::Which value = Types::AggregateFunctionState;
 };
@@ -834,6 +884,10 @@ struct Field::EnumToType<Field::Types::Decimal64> {
 template <>
 struct Field::EnumToType<Field::Types::Decimal128> {
     using Type = DecimalField<Decimal128>;
+};
+template <>
+struct Field::EnumToType<Field::Types::Decimal128I> {
+    using Type = DecimalField<Decimal128I>;
 };
 template <>
 struct Field::EnumToType<Field::Types::AggregateFunctionState> {
@@ -948,6 +1002,10 @@ struct NearestFieldTypeImpl<Decimal128> {
     using Type = DecimalField<Decimal128>;
 };
 template <>
+struct NearestFieldTypeImpl<Decimal128I> {
+    using Type = DecimalField<Decimal128I>;
+};
+template <>
 struct NearestFieldTypeImpl<DecimalField<Decimal32>> {
     using Type = DecimalField<Decimal32>;
 };
@@ -958,6 +1016,10 @@ struct NearestFieldTypeImpl<DecimalField<Decimal64>> {
 template <>
 struct NearestFieldTypeImpl<DecimalField<Decimal128>> {
     using Type = DecimalField<Decimal128>;
+};
+template <>
+struct NearestFieldTypeImpl<DecimalField<Decimal128I>> {
+    using Type = DecimalField<Decimal128I>;
 };
 template <>
 struct NearestFieldTypeImpl<Float32> {
@@ -1001,13 +1063,26 @@ struct NearestFieldTypeImpl<AggregateFunctionStateData> {
     using Type = AggregateFunctionStateData;
 };
 
+template <>
+struct Field::TypeToEnum<PackedInt128> {
+    static const Types::Which value = Types::Int128;
+};
+
+template <>
+struct NearestFieldTypeImpl<PackedInt128> {
+    using Type = Int128;
+};
+
 template <typename T>
 decltype(auto) cast_to_nearest_field_type(T&& x) {
     using U = NearestFieldType<std::decay_t<T>>;
-    if constexpr (std::is_same_v<std::decay_t<T>, U>)
+    if constexpr (std::is_same_v<PackedInt128, std::decay_t<T>>) {
+        return U(x.value);
+    } else if constexpr (std::is_same_v<std::decay_t<T>, U>) {
         return std::forward<T>(x);
-    else
+    } else {
         return U(x);
+    }
 }
 
 /// This (rather tricky) code is to avoid ambiguity in expressions like

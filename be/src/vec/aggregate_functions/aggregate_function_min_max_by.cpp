@@ -21,6 +21,7 @@
 #include "vec/aggregate_functions/aggregate_function_simple_factory.h"
 #include "vec/aggregate_functions/factory_helpers.h"
 #include "vec/aggregate_functions/helpers.h"
+#include "vec/core/types.h"
 
 namespace doris::vectorized {
 
@@ -63,6 +64,10 @@ static IAggregateFunction* create_aggregate_function_min_max_by_impl(
         return new AggregateFunctionTemplate<Data<VT, SingleValueDataDecimal<Decimal128>>, false>(
                 value_arg_type, key_arg_type);
     }
+    if (which.idx == TypeIndex::Decimal128I) {
+        return new AggregateFunctionTemplate<Data<VT, SingleValueDataDecimal<Decimal128I>>, false>(
+                value_arg_type, key_arg_type);
+    }
     return nullptr;
 }
 
@@ -99,24 +104,24 @@ static IAggregateFunction* create_aggregate_function_min_max_by(const String& na
                                                          SingleValueDataFixed<UInt32>>(
                 argument_types);
     }
-    if (which.idx == TypeIndex::Decimal128 && !config::enable_decimalv3) {
+    if (which.idx == TypeIndex::Decimal128) {
         return create_aggregate_function_min_max_by_impl<AggregateFunctionTemplate, Data,
-                                                         SingleValueDataFixed<DecimalV2Value>>(
+                                                         SingleValueDataDecimal<Decimal128>>(
                 argument_types);
     }
     if (which.idx == TypeIndex::Decimal32) {
         return create_aggregate_function_min_max_by_impl<AggregateFunctionTemplate, Data,
-                                                         SingleValueDataFixed<Int32>>(
+                                                         SingleValueDataDecimal<Decimal32>>(
                 argument_types);
     }
     if (which.idx == TypeIndex::Decimal64) {
         return create_aggregate_function_min_max_by_impl<AggregateFunctionTemplate, Data,
-                                                         SingleValueDataFixed<Int64>>(
+                                                         SingleValueDataDecimal<Decimal64>>(
                 argument_types);
     }
-    if (which.idx == TypeIndex::Decimal128) {
+    if (which.idx == TypeIndex::Decimal128I) {
         return create_aggregate_function_min_max_by_impl<AggregateFunctionTemplate, Data,
-                                                         SingleValueDataFixed<Int128>>(
+                                                         SingleValueDataDecimal<Decimal128I>>(
                 argument_types);
     }
     return nullptr;

@@ -22,6 +22,7 @@
 #include <vector>
 
 #include "common/config.h"
+#include "common/status.h"
 #include "env/env.h"
 #include "gutil/strings/split.h"
 #include "http/http_client.h"
@@ -306,9 +307,7 @@ Status UserFunctionCache::_load_cache_entry(const std::string& url, UserFunction
 
     if (entry->type == LibType::SO) {
         RETURN_IF_ERROR(_load_cache_entry_internal(entry));
-    } else if (entry->type == LibType::JAR) {
-        RETURN_IF_ERROR(_add_to_classpath(entry));
-    } else {
+    } else if (entry->type != LibType::JAR) {
         return Status::InvalidArgument(
                 "Unsupported lib type! Make sure your lib type is one of 'so' and 'jar'!");
     }
@@ -328,9 +327,11 @@ Status UserFunctionCache::_download_lib(const std::string& url, UserFunctionCach
         return Status::InternalError("fail to open file");
     }
 
+    std::string real_url = _get_real_url(url);
+
     Md5Digest digest;
     HttpClient client;
-    RETURN_IF_ERROR(client.init(url));
+    RETURN_IF_ERROR(client.init(real_url));
     Status status;
     auto download_cb = [&status, &tmp_file, &fp, &digest](const void* data, size_t length) {
         digest.update(data, length);
@@ -368,38 +369,18 @@ Status UserFunctionCache::_download_lib(const std::string& url, UserFunctionCach
     return Status::OK();
 }
 
+std::string UserFunctionCache::_get_real_url(const std::string& url) {
+    if (url.find(":/") == std::string::npos) {
+        return "file://" + config::jdbc_drivers_dir + "/" + url;
+    }
+    return url;
+}
+
 // entry's lock must be held
 Status UserFunctionCache::_load_cache_entry_internal(UserFunctionCacheEntry* entry) {
     RETURN_IF_ERROR(dynamic_open(entry->lib_file.c_str(), &entry->lib_handle));
     entry->is_loaded.store(true);
     return Status::OK();
-}
-
-Status UserFunctionCache::_add_to_classpath(UserFunctionCacheEntry* entry) {
-    if (config::enable_java_support) {
-        const std::string path = "file://" + entry->lib_file;
-        LOG(INFO) << "Add jar " << path << " to classpath";
-        JNIEnv* env;
-        RETURN_IF_ERROR(JniUtil::GetJNIEnv(&env));
-        jclass class_class_loader = env->FindClass("java/lang/ClassLoader");
-        jmethodID method_get_system_class_loader = env->GetStaticMethodID(
-                class_class_loader, "getSystemClassLoader", "()Ljava/lang/ClassLoader;");
-        jobject class_loader =
-                env->CallStaticObjectMethod(class_class_loader, method_get_system_class_loader);
-        jclass class_url_class_loader = env->FindClass("java/net/URLClassLoader");
-        jmethodID method_add_url =
-                env->GetMethodID(class_url_class_loader, "addURL", "(Ljava/net/URL;)V");
-        jclass class_url = env->FindClass("java/net/URL");
-        jmethodID url_ctor = env->GetMethodID(class_url, "<init>", "(Ljava/lang/String;)V");
-        jobject urlInstance = env->NewObject(class_url, url_ctor, env->NewStringUTF(path.c_str()));
-        env->CallVoidMethod(class_loader, method_add_url, urlInstance);
-        entry->is_loaded.store(true);
-        return Status::OK();
-    } else {
-        return Status::InternalError(
-                "Java UDF is not enabled, you can change be config enable_java_support to true and "
-                "restart be.");
-    }
 }
 
 std::string UserFunctionCache::_make_lib_file(int64_t function_id, const std::string& checksum,
@@ -429,6 +410,43 @@ Status UserFunctionCache::get_jarpath(int64_t fid, const std::string& url,
     UserFunctionCacheEntry* entry = nullptr;
     RETURN_IF_ERROR(_get_cache_entry(fid, url, checksum, &entry, LibType::JAR));
     *libpath = entry->lib_file;
+    return Status::OK();
+}
+
+Status UserFunctionCache::check_jar(int64_t fid, const std::string& url,
+                                    const std::string& checksum) {
+    UserFunctionCacheEntry* entry = nullptr;
+    Status st = Status::OK();
+    {
+        std::lock_guard<std::mutex> l(_cache_lock);
+        auto it = _entry_map.find(fid);
+        if (it != _entry_map.end()) {
+            entry = it->second;
+        } else {
+            entry = new UserFunctionCacheEntry(
+                    fid, checksum, _make_lib_file(fid, checksum, LibType::JAR), LibType::JAR);
+            entry->ref();
+            _entry_map.emplace(fid, entry);
+        }
+        entry->ref();
+    }
+    if (entry->is_loaded.load()) {
+        return st;
+    }
+
+    std::unique_lock<std::mutex> l(entry->load_lock);
+    if (!entry->is_downloaded) {
+        st = _download_lib(url, entry);
+    }
+    if (!st.ok()) {
+        // if we load a cache entry failed, I think we should delete this entry cache
+        // even if this cache was valid before.
+        _destroy_cache_entry(entry);
+        return Status::InternalError(
+                "Java UDAF has error, maybe you should check the path about java impl jar, because "
+                "{}",
+                st.to_string());
+    }
     return Status::OK();
 }
 

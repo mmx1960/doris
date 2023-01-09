@@ -18,15 +18,20 @@
 package org.apache.doris.nereids.stats;
 
 import org.apache.doris.nereids.trees.expressions.Add;
+import org.apache.doris.nereids.trees.expressions.AggregateExpression;
 import org.apache.doris.nereids.trees.expressions.Alias;
 import org.apache.doris.nereids.trees.expressions.BinaryArithmetic;
 import org.apache.doris.nereids.trees.expressions.CaseWhen;
 import org.apache.doris.nereids.trees.expressions.Cast;
 import org.apache.doris.nereids.trees.expressions.Divide;
 import org.apache.doris.nereids.trees.expressions.Expression;
+import org.apache.doris.nereids.trees.expressions.IntegralDivide;
 import org.apache.doris.nereids.trees.expressions.Multiply;
 import org.apache.doris.nereids.trees.expressions.SlotReference;
 import org.apache.doris.nereids.trees.expressions.Subtract;
+import org.apache.doris.nereids.trees.expressions.TimestampArithmetic;
+import org.apache.doris.nereids.trees.expressions.VirtualSlotReference;
+import org.apache.doris.nereids.trees.expressions.functions.BoundFunction;
 import org.apache.doris.nereids.trees.expressions.functions.agg.Avg;
 import org.apache.doris.nereids.trees.expressions.functions.agg.Count;
 import org.apache.doris.nereids.trees.expressions.functions.agg.Max;
@@ -96,7 +101,7 @@ public class ExpressionEstimation extends ExpressionVisitor<ColumnStatistic, Sta
 
     @Override
     public ColumnStatistic visitSlotReference(SlotReference slotReference, StatsDeriveResult context) {
-        ColumnStatistic columnStat = context.getColumnStatsBySlotId(slotReference.getExprId());
+        ColumnStatistic columnStat = context.getColumnStatsBySlot(slotReference);
         Preconditions.checkState(columnStat != null);
         return columnStat.copy();
     }
@@ -146,7 +151,7 @@ public class ExpressionEstimation extends ExpressionVisitor<ColumnStatistic, Sta
                     .setNumNulls(numNulls).setDataSize(dataSize).setMinValue(min).setMaxValue(max).setSelectivity(1.0)
                     .setMaxExpr(null).setMinExpr(null).build();
         }
-        if (binaryArithmetic instanceof Divide) {
+        if (binaryArithmetic instanceof Divide || binaryArithmetic instanceof IntegralDivide) {
             double min = Math.min(
                     Math.min(
                             Math.min(leftMin / noneZeroDivisor(rightMin), leftMin / noneZeroDivisor(rightMax)),
@@ -161,7 +166,7 @@ public class ExpressionEstimation extends ExpressionVisitor<ColumnStatistic, Sta
                     .setNumNulls(numNulls).setDataSize(binaryArithmetic.getDataType().width()).setMinValue(min)
                     .setMaxValue(max).setSelectivity(1.0).setMaxExpr(null).setMinExpr(null).build();
         }
-        return ColumnStatistic.UNKNOWN;
+        return ColumnStatistic.DEFAULT;
     }
 
     private double noneZeroDivisor(double d) {
@@ -172,8 +177,8 @@ public class ExpressionEstimation extends ExpressionVisitor<ColumnStatistic, Sta
     public ColumnStatistic visitMin(Min min, StatsDeriveResult context) {
         Expression child = min.child();
         ColumnStatistic columnStat = child.accept(this, context);
-        if (columnStat == ColumnStatistic.UNKNOWN) {
-            return ColumnStatistic.UNKNOWN;
+        if (columnStat == ColumnStatistic.DEFAULT) {
+            return ColumnStatistic.DEFAULT;
         }
         /*
         we keep columnStat.min and columnStat.max, but set ndv=1.
@@ -190,8 +195,8 @@ public class ExpressionEstimation extends ExpressionVisitor<ColumnStatistic, Sta
     public ColumnStatistic visitMax(Max max, StatsDeriveResult context) {
         Expression child = max.child();
         ColumnStatistic columnStat = child.accept(this, context);
-        if (columnStat == ColumnStatistic.UNKNOWN) {
-            return ColumnStatistic.UNKNOWN;
+        if (columnStat == ColumnStatistic.DEFAULT) {
+            return ColumnStatistic.DEFAULT;
         }
         /*
         we keep columnStat.min and columnStat.max, but set ndv=1.
@@ -210,8 +215,8 @@ public class ExpressionEstimation extends ExpressionVisitor<ColumnStatistic, Sta
         }
         Expression child = count.child(0);
         ColumnStatistic columnStat = child.accept(this, context);
-        if (columnStat == ColumnStatistic.UNKNOWN) {
-            return ColumnStatistic.UNKNOWN;
+        if (columnStat == ColumnStatistic.DEFAULT) {
+            return ColumnStatistic.DEFAULT;
         }
         double expectedValue = context.getRowCount() - columnStat.numNulls;
         double width = (double) count.getDataType().width();
@@ -262,5 +267,31 @@ public class ExpressionEstimation extends ExpressionVisitor<ColumnStatistic, Sta
     @Override
     public ColumnStatistic visitAlias(Alias alias, StatsDeriveResult context) {
         return alias.child().accept(this, context);
+    }
+
+    @Override
+    public ColumnStatistic visitVirtualReference(VirtualSlotReference virtualSlotReference, StatsDeriveResult context) {
+        return ColumnStatistic.DEFAULT;
+    }
+
+    @Override
+    public ColumnStatistic visitBoundFunction(BoundFunction boundFunction, StatsDeriveResult context) {
+        return ColumnStatistic.DEFAULT;
+    }
+
+    @Override
+    public ColumnStatistic visitAggregateExpression(AggregateExpression aggregateExpression,
+            StatsDeriveResult context) {
+        return aggregateExpression.child().accept(this, context);
+    }
+
+    @Override
+    public ColumnStatistic visitTimestampArithmetic(TimestampArithmetic arithmetic, StatsDeriveResult context) {
+        ColumnStatistic colStat = arithmetic.child(0).accept(this, context);
+        ColumnStatisticBuilder builder = new ColumnStatisticBuilder(colStat);
+        builder.setMinValue(Double.MIN_VALUE);
+        builder.setMaxValue(Double.MAX_VALUE);
+        builder.setSelectivity(1.0);
+        return builder.build();
     }
 }

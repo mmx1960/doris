@@ -88,14 +88,14 @@ public class CreateTableTest {
         Set<TabletMeta> tabletIdSetAfterDuplicateCreateTable4 =
                 new HashSet<>(env.getTabletInvertedIndex().getTabletMetaTable().values());
 
-        Assert.assertTrue(tabletIdSetAfterCreateFirstTable.equals(tabletIdSetAfterDuplicateCreateTable1));
-        Assert.assertTrue(tabletIdSetAfterCreateFirstTable.equals(tabletIdSetAfterDuplicateCreateTable2));
-        Assert.assertTrue(tabletIdSetAfterCreateFirstTable.equals(tabletIdSetAfterDuplicateCreateTable3));
-        Assert.assertTrue(tabletMetaSetBeforeCreateFirstTable.equals(tabletIdSetAfterDuplicateCreateTable4));
+        Assert.assertEquals(tabletIdSetAfterCreateFirstTable, tabletIdSetAfterDuplicateCreateTable1);
+        Assert.assertEquals(tabletIdSetAfterCreateFirstTable, tabletIdSetAfterDuplicateCreateTable2);
+        Assert.assertEquals(tabletIdSetAfterCreateFirstTable, tabletIdSetAfterDuplicateCreateTable3);
+        Assert.assertEquals(tabletMetaSetBeforeCreateFirstTable, tabletIdSetAfterDuplicateCreateTable4);
 
         // check whether table id is cleared from colocate group after duplicate create table
         Set<Long> colocateTableIdAfterCreateFirstTable = env.getColocateTableIndex().getTable2Group().keySet();
-        Assert.assertTrue(colocateTableIdBeforeCreateFirstTable.equals(colocateTableIdAfterCreateFirstTable));
+        Assert.assertEquals(colocateTableIdBeforeCreateFirstTable, colocateTableIdAfterCreateFirstTable);
     }
 
     @Test
@@ -208,6 +208,15 @@ public class CreateTableTest {
                         + "distributed by hash(k2) buckets 1\n"
                         + "properties('replication_num' = '1');"));
 
+        // table with sequence col
+        ExceptionChecker
+                .expectThrowsNoException(() -> createTable("create table test.tbl13\n"
+                        + "(k1 varchar(40), k2 int, v1 int)\n"
+                        + "unique key(k1, k2)\n"
+                        + "partition by range(k2)\n" + "(partition p1 values less than(\"10\"))\n"
+                        + "distributed by hash(k2) buckets 1\n" + "properties('replication_num' = '1',\n"
+                        + "'function_column.sequence_col' = 'v1');"));
+
         Database db = Env.getCurrentInternalCatalog().getDbOrDdlException("default_cluster:test");
         OlapTable tbl6 = (OlapTable) db.getTableOrDdlException("tbl6");
         Assert.assertTrue(tbl6.getColumn("k1").isKey());
@@ -224,6 +233,11 @@ public class CreateTableTest {
         Assert.assertTrue(tbl8.getColumn("k2").isKey());
         Assert.assertFalse(tbl8.getColumn("v1").isKey());
         Assert.assertTrue(tbl8.getColumn(Column.SEQUENCE_COL).getAggregationType() == AggregateType.REPLACE);
+
+        OlapTable tbl13 = (OlapTable) db.getTableOrDdlException("tbl13");
+        Assert.assertTrue(tbl13.getColumn(Column.SEQUENCE_COL).getAggregationType() == AggregateType.REPLACE);
+        Assert.assertTrue(tbl13.getColumn(Column.SEQUENCE_COL).getType() == Type.INT);
+        Assert.assertEquals(tbl13.getSequenceMapCol(), "v1");
     }
 
     @Test
@@ -287,6 +301,30 @@ public class CreateTableTest {
                                 + "partition by range(k2)\n" + "(partition p1 values less than(\"10\"))\n"
                                 + "distributed by hash(k2) buckets 1\n" + "properties('replication_num' = '1',\n"
                                 + "'function_column.sequence_type' = 'double');"));
+
+        ExceptionChecker
+                .expectThrowsWithMsg(DdlException.class, "The sequence_col and sequence_type cannot be set at the same time",
+                        () -> createTable("create table test.atbl8\n" + "(k1 varchar(40), k2 int, v1 int)\n"
+                                + "unique key(k1, k2)\n"
+                                + "partition by range(k2)\n" + "(partition p1 values less than(\"10\"))\n"
+                                + "distributed by hash(k2) buckets 1\n" + "properties('replication_num' = '1',\n"
+                                + "'function_column.sequence_type' = 'int', 'function_column.sequence_col' = 'v1');"));
+
+        ExceptionChecker
+                .expectThrowsWithMsg(DdlException.class, "The specified sequence column[v3] not exists",
+                        () -> createTable("create table test.atbl8\n" + "(k1 varchar(40), k2 int, v1 int)\n"
+                                + "unique key(k1, k2)\n"
+                                + "partition by range(k2)\n" + "(partition p1 values less than(\"10\"))\n"
+                                + "distributed by hash(k2) buckets 1\n" + "properties('replication_num' = '1',\n"
+                                + "'function_column.sequence_col' = 'v3');"));
+
+        ExceptionChecker
+                .expectThrowsWithMsg(DdlException.class, "Sequence type only support integer types and date types",
+                        () -> createTable("create table test.atbl8\n" + "(k1 varchar(40), k2 int, v1 int)\n"
+                                + "unique key(k1, k2)\n"
+                                + "partition by range(k2)\n" + "(partition p1 values less than(\"10\"))\n"
+                                + "distributed by hash(k2) buckets 1\n" + "properties('replication_num' = '1',\n"
+                                + "'function_column.sequence_col' = 'k1');"));
 
         /**
          * create table with list partition
@@ -606,5 +644,46 @@ public class CreateTableTest {
                     + ") distributed by hash(k1) buckets 1\n"
                     + "properties(\"replication_num\" = \"1\");");
         });
+
+        ExceptionChecker.expectThrowsNoException(() -> {
+            createTable("create table test.test_array( \n"
+                    + "task_insert_time BIGINT NOT NULL DEFAULT \"0\" COMMENT \"\" , \n"
+                    + "task_project ARRAY<VARCHAR(64)>  DEFAULT NULL COMMENT \"\" ,\n"
+                    + "route_key DATEV2 NOT NULL COMMENT \"range分区键\"\n"
+                    + ") \n"
+                    + "DUPLICATE KEY(`task_insert_time`)  \n"
+                    + " COMMENT \"\"\n"
+                    + "PARTITION BY RANGE(route_key) \n"
+                    + "(PARTITION `p202209` VALUES LESS THAN (\"2022-10-01\"),\n"
+                    + "PARTITION `p202210` VALUES LESS THAN (\"2022-11-01\"),\n"
+                    + "PARTITION `p202211` VALUES LESS THAN (\"2022-12-01\")) \n"
+                    + "DISTRIBUTED BY HASH(`task_insert_time` ) BUCKETS 32 \n"
+                    + "PROPERTIES\n"
+                    + "(\n"
+                    + "    \"replication_num\" = \"1\",    \n"
+                    + "    \"light_schema_change\" = \"true\"    \n"
+                    + ");");
+        });
+
+        ExceptionChecker.expectThrowsWithMsg(AnalysisException.class, "Complex type column can't be partition column",
+                () -> {
+                    createTable("create table test.test_array2( \n"
+                            + "task_insert_time BIGINT NOT NULL DEFAULT \"0\" COMMENT \"\" , \n"
+                            + "task_project ARRAY<VARCHAR(64)>  DEFAULT NULL COMMENT \"\" ,\n"
+                            + "route_key DATEV2 NOT NULL COMMENT \"range分区键\"\n"
+                            + ") \n"
+                            + "DUPLICATE KEY(`task_insert_time`)  \n"
+                            + " COMMENT \"\"\n"
+                            + "PARTITION BY RANGE(task_project) \n"
+                            + "(PARTITION `p202209` VALUES LESS THAN (\"2022-10-01\"),\n"
+                            + "PARTITION `p202210` VALUES LESS THAN (\"2022-11-01\"),\n"
+                            + "PARTITION `p202211` VALUES LESS THAN (\"2022-12-01\")) \n"
+                            + "DISTRIBUTED BY HASH(`task_insert_time` ) BUCKETS 32 \n"
+                            + "PROPERTIES\n"
+                            + "(\n"
+                            + "    \"replication_num\" = \"1\",    \n"
+                            + "    \"light_schema_change\" = \"true\"    \n"
+                            + ");");
+                });
     }
 }

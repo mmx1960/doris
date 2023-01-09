@@ -18,6 +18,8 @@
 package org.apache.doris.nereids.rules.mv;
 
 import org.apache.doris.common.FeConstants;
+import org.apache.doris.nereids.rules.analysis.LogicalSubQueryAliasToLogicalProject;
+import org.apache.doris.nereids.rules.rewrite.logical.MergeProjects;
 import org.apache.doris.nereids.trees.plans.PreAggStatus;
 import org.apache.doris.nereids.util.PatternMatchSupported;
 import org.apache.doris.nereids.util.PlanChecker;
@@ -182,6 +184,8 @@ class SelectRollupIndexTest extends BaseMaterializedIndexSelectTest implements P
                 + " where c3>0 group by c2";
         PlanChecker.from(connectContext)
                 .analyze(sql)
+                .applyBottomUp(new LogicalSubQueryAliasToLogicalProject())
+                .applyTopDown(new MergeProjects())
                 .applyTopDown(new SelectMaterializedIndexWithAggregate())
                 .applyTopDown(new SelectMaterializedIndexWithoutAggregate())
                 .matches(logicalOlapScan().when(scan -> {
@@ -358,9 +362,9 @@ class SelectRollupIndexTest extends BaseMaterializedIndexSelectTest implements P
 
     @Test
     public void testCountDistinctValueColumn() {
-        singleTableTest("select k1, count(distinct v1) from from t group by k1", scan -> {
+        singleTableTest("select k1, count(distinct v1) from t group by k1", scan -> {
             Assertions.assertFalse(scan.isPreAggregation());
-            Assertions.assertEquals("Count distinct is only valid for key columns, but meet count(distinct v1).",
+            Assertions.assertEquals("Count distinct is only valid for key columns, but meet count(DISTINCT v1).",
                     scan.getReasonOfPreAggregation());
             Assertions.assertEquals("t", scan.getSelectedIndexName());
         });

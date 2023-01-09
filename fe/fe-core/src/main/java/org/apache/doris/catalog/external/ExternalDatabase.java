@@ -65,6 +65,7 @@ public class ExternalDatabase<T extends ExternalTable> implements DatabaseIf<T>,
     @SerializedName(value = "initialized")
     protected boolean initialized = false;
     protected ExternalCatalog extCatalog;
+    protected boolean invalidCacheInInit = true;
 
     /**
      * No args constructor for persist.
@@ -93,8 +94,12 @@ public class ExternalDatabase<T extends ExternalTable> implements DatabaseIf<T>,
     public void setTableExtCatalog(ExternalCatalog extCatalog) {
     }
 
-    public void setUnInitialized() {
+    public void setUnInitialized(boolean invalidCache) {
         this.initialized = false;
+        this.invalidCacheInInit = invalidCache;
+        if (invalidCache) {
+            Env.getCurrentEnv().getExtMetaCacheMgr().invalidateDbCache(extCatalog.getId(), name);
+        }
     }
 
     public boolean isInitialized() {
@@ -107,7 +112,7 @@ public class ExternalDatabase<T extends ExternalTable> implements DatabaseIf<T>,
                 // Forward to master and wait the journal to replay.
                 MasterCatalogExecutor remoteExecutor = new MasterCatalogExecutor();
                 try {
-                    remoteExecutor.forward(extCatalog.getId(), id, -1);
+                    remoteExecutor.forward(extCatalog.getId(), id);
                 } catch (Exception e) {
                     Util.logAndThrowRuntimeException(LOG,
                             String.format("failed to forward init external db %s operation to master", name), e);
@@ -253,4 +258,9 @@ public class ExternalDatabase<T extends ExternalTable> implements DatabaseIf<T>,
 
     @Override
     public void gsonPostProcess() throws IOException {}
+
+    @Override
+    public void dropTable(String tableName) {
+        throw new NotImplementedException();
+    }
 }

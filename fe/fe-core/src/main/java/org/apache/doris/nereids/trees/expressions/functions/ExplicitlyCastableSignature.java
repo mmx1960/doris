@@ -21,6 +21,8 @@ import org.apache.doris.catalog.FunctionSignature;
 import org.apache.doris.catalog.Type;
 import org.apache.doris.nereids.types.coercion.AbstractDataType;
 
+import java.util.List;
+
 /**
  * Explicitly castable signature. This class equals to 'CompareMode.IS_NONSTRICT_SUPERTYPE_OF'.
  *
@@ -34,8 +36,9 @@ public interface ExplicitlyCastableSignature extends ComputeSignature {
     }
 
     @Override
-    default FunctionSignature searchSignature() {
-        return SearchSignature.from(getSignatures(), getArguments())
+    default FunctionSignature searchSignature(List<FunctionSignature> signatures) {
+
+        return SearchSignature.from(signatures, getArguments())
                 // first round, use identical strategy to find signature
                 .orElseSearch(IdenticalSignature::isIdentical)
                 // second round: if not found, use nullOrIdentical strategy

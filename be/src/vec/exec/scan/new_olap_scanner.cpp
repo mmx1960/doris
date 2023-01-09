@@ -34,12 +34,12 @@ NewOlapScanner::NewOlapScanner(RuntimeState* state, NewOlapScanNode* parent, int
     _tablet_schema = std::make_shared<TabletSchema>();
 }
 
-Status NewOlapScanner::prepare(
-        const TPaloScanRange& scan_range, const std::vector<OlapScanRange*>& key_ranges,
-        VExprContext** vconjunct_ctx_ptr, const std::vector<TCondition>& filters,
-        const std::vector<std::pair<string, std::shared_ptr<BloomFilterFuncBase>>>& bloom_filters,
-        const std::vector<std::pair<string, std::shared_ptr<HybridSetBase>>>& in_filters,
-        const std::vector<FunctionFilter>& function_filters) {
+Status NewOlapScanner::prepare(const TPaloScanRange& scan_range,
+                               const std::vector<OlapScanRange*>& key_ranges,
+                               VExprContext** vconjunct_ctx_ptr,
+                               const std::vector<TCondition>& filters,
+                               const FilterPredicates& filter_predicates,
+                               const std::vector<FunctionFilter>& function_filters) {
     if (vconjunct_ctx_ptr != nullptr) {
         // Copy vconjunct_ctx_ptr from scan node to this scanner's _vconjunct_ctx.
         RETURN_IF_ERROR((*vconjunct_ctx_ptr)->clone(_state, &_vconjunct_ctx));
@@ -104,8 +104,8 @@ Status NewOlapScanner::prepare(
             }
 
             // Initialize tablet_reader_params
-            RETURN_IF_ERROR(_init_tablet_reader_params(key_ranges, filters, bloom_filters,
-                                                       in_filters, function_filters));
+            RETURN_IF_ERROR(_init_tablet_reader_params(key_ranges, filters, filter_predicates,
+                                                       function_filters));
         }
     }
 
@@ -127,11 +127,14 @@ Status NewOlapScanner::open(RuntimeState* state) {
     return Status::OK();
 }
 
+void NewOlapScanner::set_compound_filters(const std::vector<TCondition>& compound_filters) {
+    _compound_filters = compound_filters;
+}
+
 // it will be called under tablet read lock because capture rs readers need
 Status NewOlapScanner::_init_tablet_reader_params(
         const std::vector<OlapScanRange*>& key_ranges, const std::vector<TCondition>& filters,
-        const std::vector<std::pair<string, std::shared_ptr<BloomFilterFuncBase>>>& bloom_filters,
-        const std::vector<std::pair<string, std::shared_ptr<HybridSetBase>>>& in_filters,
+        const FilterPredicates& filter_predicates,
         const std::vector<FunctionFilter>& function_filters) {
     // if the table with rowset [0-x] or [0-1] [2-y], and [0-1] is empty
     bool single_version =
@@ -169,16 +172,32 @@ Status NewOlapScanner::_init_tablet_reader_params(
                 real_parent->_olap_scan_node.push_down_agg_type_opt;
     }
     _tablet_reader_params.version = Version(0, _version);
+    _tablet_reader_params.remaining_vconjunct_root =
+            (_vconjunct_ctx == nullptr) ? nullptr : _vconjunct_ctx->root();
 
     // Condition
     for (auto& filter : filters) {
+        if (is_match_condition(filter.condition_op) &&
+            !_tablet_schema->has_inverted_index(
+                    _tablet_schema->column(filter.column_name).unique_id())) {
+            return Status::NotSupported("Match query must with inverted index, column `" +
+                                        filter.column_name + "` is not inverted index column");
+        }
         _tablet_reader_params.conditions.push_back(filter);
     }
-    std::copy(bloom_filters.cbegin(), bloom_filters.cend(),
+
+    std::copy(_compound_filters.cbegin(), _compound_filters.cend(),
+              std::inserter(_tablet_reader_params.conditions_except_leafnode_of_andnode,
+                            _tablet_reader_params.conditions_except_leafnode_of_andnode.begin()));
+
+    std::copy(filter_predicates.bloom_filters.cbegin(), filter_predicates.bloom_filters.cend(),
               std::inserter(_tablet_reader_params.bloom_filters,
                             _tablet_reader_params.bloom_filters.begin()));
+    std::copy(filter_predicates.bitmap_filters.cbegin(), filter_predicates.bitmap_filters.cend(),
+              std::inserter(_tablet_reader_params.bitmap_filters,
+                            _tablet_reader_params.bitmap_filters.begin()));
 
-    std::copy(in_filters.cbegin(), in_filters.cend(),
+    std::copy(filter_predicates.in_filters.cbegin(), filter_predicates.in_filters.cend(),
               std::inserter(_tablet_reader_params.in_filters,
                             _tablet_reader_params.in_filters.begin()));
 
@@ -275,6 +294,9 @@ Status NewOlapScanner::_init_tablet_reader_params(
                     olap_scan_node.sort_info.is_asc_order.size();
         }
     }
+
+    _tablet_reader_params.use_topn_opt = ((NewOlapScanNode*)_parent)->_olap_scan_node.use_topn_opt;
+
     return Status::OK();
 }
 
@@ -287,6 +309,11 @@ Status NewOlapScanner::_init_return_columns() {
         int32_t index = slot->col_unique_id() >= 0
                                 ? _tablet_schema->field_index(slot->col_unique_id())
                                 : _tablet_schema->field_index(slot->col_name());
+
+        if (index < 0) {
+            const std::string MATERIALIZED_VIEW_NAME_PREFIX = "mv_";
+            index = _tablet_schema->field_index(MATERIALIZED_VIEW_NAME_PREFIX + slot->col_name());
+        }
 
         if (index < 0) {
             std::stringstream ss;
@@ -307,13 +334,13 @@ Status NewOlapScanner::_init_return_columns() {
 }
 
 Status NewOlapScanner::_get_block_impl(RuntimeState* state, Block* block, bool* eof) {
-    if (!_profile_updated) {
-        _profile_updated = _tablet_reader->update_profile(_profile);
-    }
     // Read one block from block reader
     // ATTN: Here we need to let the _get_block_impl method guarantee the semantics of the interface,
     // that is, eof can be set to true only when the returned block is empty.
     RETURN_IF_ERROR(_tablet_reader->next_block_with_aggregation(block, nullptr, nullptr, eof));
+    if (!_profile_updated) {
+        _profile_updated = _tablet_reader->update_profile(_profile);
+    }
     if (block->rows() > 0) {
         *eof = false;
     }
@@ -384,6 +411,8 @@ void NewOlapScanner::_update_counters_before_close() {
     COUNTER_UPDATE(olap_parent->_block_init_timer, stats.block_init_ns);
     COUNTER_UPDATE(olap_parent->_block_init_seek_timer, stats.block_init_seek_ns);
     COUNTER_UPDATE(olap_parent->_block_init_seek_counter, stats.block_init_seek_num);
+    COUNTER_UPDATE(olap_parent->_block_conditions_filtered_timer,
+                   stats.block_conditions_filtered_ns);
     COUNTER_UPDATE(olap_parent->_first_read_timer, stats.first_read_ns);
     COUNTER_UPDATE(olap_parent->_first_read_seek_timer, stats.block_first_read_seek_ns);
     COUNTER_UPDATE(olap_parent->_first_read_seek_counter, stats.block_first_read_seek_num);
@@ -412,6 +441,12 @@ void NewOlapScanner::_update_counters_before_close() {
 
     COUNTER_UPDATE(olap_parent->_bitmap_index_filter_counter, stats.rows_bitmap_index_filtered);
     COUNTER_UPDATE(olap_parent->_bitmap_index_filter_timer, stats.bitmap_index_filter_timer);
+
+    COUNTER_UPDATE(olap_parent->_inverted_index_filter_counter, stats.rows_inverted_index_filtered);
+    COUNTER_UPDATE(olap_parent->_inverted_index_filter_timer, stats.inverted_index_filter_timer);
+
+    COUNTER_UPDATE(olap_parent->_output_index_result_column_timer,
+                   stats.output_index_result_column_timer);
 
     COUNTER_UPDATE(olap_parent->_filtered_segment_counter, stats.filtered_segment_number);
     COUNTER_UPDATE(olap_parent->_total_segment_counter, stats.total_segment_number);

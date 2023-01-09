@@ -67,7 +67,9 @@ public class Substring extends ScalarFunction
 
     @Override
     protected FunctionSignature computeSignature(FunctionSignature signature) {
-        Optional<Expression> length = getLength();
+        Optional<Expression> length = arity() == 3
+                ? Optional.of(getArgument(2))
+                : Optional.empty();
         DataType returnType = VarcharType.SYSTEM_DEFAULT;
         if (length.isPresent() && length.get() instanceof IntegerLiteral) {
             returnType = VarcharType.createVarcharType(((IntegerLiteral) length.get()).getValue());

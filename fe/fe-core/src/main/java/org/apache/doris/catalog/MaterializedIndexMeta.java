@@ -147,9 +147,17 @@ public class MaterializedIndexMeta implements Writable, GsonPostProcessable {
         }
     }
 
+    public static String normalizeName(String name) {
+        return name.replace("`", "");
+    }
+
+    public static boolean matchColumnName(String lhs, String rhs) {
+        return normalizeName(lhs).equalsIgnoreCase(normalizeName(rhs));
+    }
+
     public Column getColumnByName(String columnName) {
         for (Column column : schema) {
-            if (column.getName().equalsIgnoreCase(columnName)) {
+            if (matchColumnName(column.getName(), columnName)) {
                 return column;
             }
         }
@@ -224,7 +232,7 @@ public class MaterializedIndexMeta implements Writable, GsonPostProcessable {
 
     public void initSchemaColumnUniqueId() {
         maxColUniqueId = Column.COLUMN_UNIQUE_ID_INIT_VALUE;
-        this.schema.stream().forEach(column -> {
+        this.schema.forEach(column -> {
             column.setUniqueId(incAndGetMaxColUniqueId());
             LOG.debug("indexId: {},  column:{}, uniqueId:{}",
                     indexId, column, column.getUniqueId());

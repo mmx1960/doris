@@ -45,8 +45,8 @@ public abstract class DateTimeWithPrecision extends ScalarFunction {
         if (arity() == 1 && signature.returnType instanceof DateTimeV2Type) {
             // For functions in TIME_FUNCTIONS_WITH_PRECISION, we can't figure out which function should be use when
             // searching in FunctionSet. So we adjust the return type by hand here.
-            if (child(0) instanceof IntegerLikeLiteral) {
-                IntegerLikeLiteral integerLikeLiteral = (IntegerLikeLiteral) child(0);
+            if (getArgument(0) instanceof IntegerLikeLiteral) {
+                IntegerLikeLiteral integerLikeLiteral = (IntegerLikeLiteral) getArgument(0);
                 signature = signature.withReturnType(DateTimeV2Type.of(integerLikeLiteral.getIntValue()));
             } else {
                 signature = signature.withReturnType(DateTimeV2Type.of(6));

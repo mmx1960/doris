@@ -98,7 +98,7 @@ CREATE TABLE IF NOT EXISTS example_db.example_list_tbl
     `user_id` LARGEINT NOT NULL COMMENT "用户id",
     `date` DATE NOT NULL COMMENT "数据灌入日期时间",
     `timestamp` DATETIME NOT NULL COMMENT "数据灌入的时间戳",
-    `city` VARCHAR(20) COMMENT "用户所在城市",
+    `city` VARCHAR(20) NOT NULL COMMENT "用户所在城市",
     `age` SMALLINT COMMENT "用户年龄",
     `sex` TINYINT COMMENT "用户性别",
     `last_visit_date` DATETIME REPLACE DEFAULT "1970-01-01 00:00:00" COMMENT "用户最后一次访问时间",
@@ -157,8 +157,14 @@ Doris 支持两层的数据划分。第一层是 Partition，支持 Range 和 Li
 
    - 分区列通常为时间列，以方便的管理新旧数据。
 
-   - Partition 支持通过 `VALUES LESS THAN (...)` 仅指定上界，系统会将前一个分区的上界作为该分区的下界，生成一个左闭右开的区间。同时，也支持通过 `VALUES [...)` 指定上下界，生成一个左闭右开的区间。
-
+   - Partition 支持通过 `VALUES LESS THAN (...)` 仅指定上界，系统会将前一个分区的上界作为该分区的下界，生成一个左闭右开的区间。也支持通过 `VALUES [...)` 指定上下界，生成一个左闭右开的区间。
+   
+<version since="1.2.0">
+   
+   - 同时，也支持通过`FROM(...) TO (...) INTERVAL ...` 来批量创建分区。
+   
+</version>
+   
    - 通过 `VALUES [...)` 同时指定上下界比较容易理解。这里举例说明，当使用 `VALUES LESS THAN (...)` 语句进行分区的增删操作时，分区范围的变化情况：
 
      - 如上 `example_range_tbl` 示例，当建表完成后，会自动生成如下3个分区：
@@ -252,6 +258,17 @@ Doris 支持两层的数据划分。第一层是 Partition，支持 Range 和 Li
    * 2017-04-01, 1000    --> 无法导入
    * 2017-05-01, 1000    --> 无法导入
    ```
+<version since="1.2.0">
+
+   Range分区同样支持**批量分区**， 通过语句 `FROM ("2022-01-03") TO ("2022-01-06") INTERVAL 1 DAY` 批量创建按天划分的分区：2022-01-03到2022-01-06（不含2022-01-06日），分区结果如下：
+
+   ```text
+   p20220103:    [2022-01-03,  2022-01-04)
+   p20220104:    [2022-01-04,  2022-01-05)
+   p20220105:    [2022-01-05,  2022-01-06)
+   ```
+
+</version>
 
    **List 分区**
 

@@ -35,9 +35,9 @@ under the License.
 在下线过程中，通过 show backends 查看下线节点的 tabletNum ，会观察到 tabletNum 数量在减少，说明数据分片正在从这个节点迁移走。当数量减到0时，系统会自动删除这个节点。但某些情况下，tabletNum 下降到一定数值后就不变化。这通常可能有以下两种原因：
 
 1. 这些 tablet 属于刚被删除的表、分区或物化视图。而刚被删除的对象会保留在回收站中。而下线逻辑不会处理这些分片。可以通过修改 FE 的配置参数 catalog_trash_expire_second 来修改对象在回收站中驻留的时间。当对象从回收站中被删除后，这些 tablet就会被处理了。
-2. 这些 tablet 的迁移任务出现了问题。此时需要通过 show proc "/cluster_balance" 来查看具体任务的错误了。
+2. 这些 tablet 的迁移任务出现了问题。此时需要通过 `show proc "/cluster_balance"` 来查看具体任务的错误了。
 
-对于以上情况，可以先通过 show proc "/statistic" 查看集群是否还有 unhealthy 的分片，如果为0，则可以直接通过 drop backend 语句删除这个 BE 。否则，还需要具体查看不健康分片的副本情况。
+对于以上情况，可以先通过 `show proc "/cluster_health/tablet_health";` 查看集群是否还有 unhealthy 的分片，如果为0，则可以直接通过 drop backend 语句删除这个 BE 。否则，还需要具体查看不健康分片的副本情况。
 
 ### Q2. priorty_network 应该如何设置？
 
@@ -51,7 +51,7 @@ priorty_network 的值是 CIDR 格式表示的。分为两部分，第一部分�
 
 首先明确一点，FE 只有两种角色：Follower 和 Observer。而 Master 只是一组 Follower 节点中选择出来的一个 FE。Master 可以看成是一种特殊的 Follower。所以当我们被问及一个集群有多少 FE，都是什么角色时，正确的回答当时应该是所有 FE 节点的个数，以及 Follower 角色的个数和 Observer 角色的个数。
 
-所有 Follower 角色的 FE 节点会组成一个可选择组，类似 Poxas 一致性协议里的组概念。组内会选举出一个 Follower 作为 Master。当 Master 挂了，会自动选择新的 Follower 作为 Master。而 Observer 不会参与选举，因此 Observer 也不会称为 Master 。
+所有 Follower 角色的 FE 节点会组成一个可选择组，类似 Paxos 一致性协议里的组概念。组内会选举出一个 Follower 作为 Master。当 Master 挂了，会自动选择新的 Follower 作为 Master。而 Observer 不会参与选举，因此 Observer 也不会称为 Master 。
 
 一条元数据日志需要在多数 Follower 节点写入成功，才算成功。比如3个 FE ，2个写入成功才可以。这也是为什么 Follower 角色的个数需要是奇数的原因。
 
@@ -293,3 +293,20 @@ ERROR 1105 (HY000): errCode = 2, detailMessage = driver connect Error: HY000 [My
 ldd /path/to/libmyodbc8w.so |grep libssl.so
 ```
 如果输出包含 `libssl.so.10` 则使用过程中可能出现问题， 如果包含`libssl.so.1.1` 则与doris 1.0 兼容
+
+### Q15. 升级到 1.2 版本，BE NoClassDefFoundError 问题启动失败
+<version since="1.2"> Java UDF 依赖错误 </version>
+如果升级后启动 be 出现下面这种 Java `NoClassDefFoundError` 错误
+```
+Exception in thread "main" java.lang.NoClassDefFoundError: org/apache/doris/udf/IniUtil
+Caused by: java.lang.ClassNotFoundException: org.apache.doris.udf.JniUtil
+```
+需要重官网下载 `apache-doris-java-udf-jar-with-dependencies-1.2.0` 的 Java UDF 函数依赖包，放到 BE 安装目录下的 lib 目录，然后重新启动 BE
+
+### Q16. 升级到 1.2 版本，BE 启动显示 Failed to initialize JNI 问题
+<version since="1.2"> Java 环境问题 </version>
+如果升级后启动 BE 出现下面这种 `Failed to initialize JNI` 错误
+```
+Failed to initialize JNI: Failed to find the library libjvm.so.
+```
+需要在系统设置 `JAVA_HOME` 环境变量，或者在 `start_be.sh` 启动脚本第一行添加 `export JAVA_HOME=your_java_home_path`，然后重新启动 BE 节点。

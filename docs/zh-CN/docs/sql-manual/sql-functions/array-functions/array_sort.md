@@ -24,6 +24,12 @@ under the License.
 
 ## array_sort
 
+<version since="1.2.0">
+
+array_sort
+
+</version>
+
 ### description
 
 #### Syntax
@@ -43,7 +49,7 @@ ARRAY<T> array_sort(ARRAY<T> arr)
 
 ```
 mysql> set enable_vectorized_engine=true;
-mysql> select k1, k2, array_sort(k2) array_test;
+mysql> select k1, k2, array_sort(k2) from array_test;
 +------+-----------------------------+-----------------------------+
 | k1   | k2                          | array_sort(`k2`)            |
 +------+-----------------------------+-----------------------------+

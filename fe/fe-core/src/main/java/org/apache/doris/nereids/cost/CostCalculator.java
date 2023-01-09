@@ -17,23 +17,27 @@
 
 package org.apache.doris.nereids.cost;
 
-import org.apache.doris.common.Id;
 import org.apache.doris.nereids.PlanContext;
+import org.apache.doris.nereids.annotation.Developing;
 import org.apache.doris.nereids.memo.GroupExpression;
 import org.apache.doris.nereids.properties.DistributionSpec;
 import org.apache.doris.nereids.properties.DistributionSpecGather;
 import org.apache.doris.nereids.properties.DistributionSpecHash;
 import org.apache.doris.nereids.properties.DistributionSpecReplicated;
 import org.apache.doris.nereids.trees.plans.Plan;
-import org.apache.doris.nereids.trees.plans.physical.PhysicalAggregate;
 import org.apache.doris.nereids.trees.plans.physical.PhysicalAssertNumRows;
 import org.apache.doris.nereids.trees.plans.physical.PhysicalDistribute;
+import org.apache.doris.nereids.trees.plans.physical.PhysicalFileScan;
+import org.apache.doris.nereids.trees.plans.physical.PhysicalGenerate;
+import org.apache.doris.nereids.trees.plans.physical.PhysicalHashAggregate;
 import org.apache.doris.nereids.trees.plans.physical.PhysicalHashJoin;
 import org.apache.doris.nereids.trees.plans.physical.PhysicalLocalQuickSort;
 import org.apache.doris.nereids.trees.plans.physical.PhysicalNestedLoopJoin;
 import org.apache.doris.nereids.trees.plans.physical.PhysicalOlapScan;
 import org.apache.doris.nereids.trees.plans.physical.PhysicalProject;
 import org.apache.doris.nereids.trees.plans.physical.PhysicalQuickSort;
+import org.apache.doris.nereids.trees.plans.physical.PhysicalSchemaScan;
+import org.apache.doris.nereids.trees.plans.physical.PhysicalStorageLayerAggregate;
 import org.apache.doris.nereids.trees.plans.physical.PhysicalTopN;
 import org.apache.doris.nereids.trees.plans.visitor.PlanVisitor;
 import org.apache.doris.qe.ConnectContext;
@@ -41,12 +45,12 @@ import org.apache.doris.statistics.StatsDeriveResult;
 
 import com.google.common.base.Preconditions;
 
-import java.util.List;
-
 /**
  * Calculate the cost of a plan.
  * Inspired by Presto.
  */
+@Developing
+//TODO: memory cost and network cost should be estimated by byte size.
 public class CostCalculator {
     static final double CPU_WEIGHT = 1;
     static final double MEMORY_WEIGHT = 1;
@@ -60,7 +64,7 @@ public class CostCalculator {
      * AGG is time-consuming operator. From the perspective of rowCount, nereids may choose Plan1,
      * because `Agg1 join Agg2` generates few tuples. But in Plan1, Agg1 and Agg2 are done in serial, in Plan2, Agg1 and
      * Agg2 are done in parallel. And hence, Plan1 should be punished.
-     *
+     * <p>
      * An example is tpch q15.
      */
     static final double HEAVY_OPERATOR_PUNISH_FACTOR = 6.0;
@@ -95,7 +99,27 @@ public class CostCalculator {
         @Override
         public CostEstimate visitPhysicalOlapScan(PhysicalOlapScan physicalOlapScan, PlanContext context) {
             StatsDeriveResult statistics = context.getStatisticsWithCheck();
-            return CostEstimate.ofCpu(statistics.computeSize());
+            return CostEstimate.ofCpu(statistics.getRowCount());
+        }
+
+        public CostEstimate visitPhysicalSchemaScan(PhysicalSchemaScan physicalSchemaScan, PlanContext context) {
+            StatsDeriveResult statistics = context.getStatisticsWithCheck();
+            return CostEstimate.ofCpu(statistics.getRowCount());
+        }
+
+        @Override
+        public CostEstimate visitPhysicalStorageLayerAggregate(
+                PhysicalStorageLayerAggregate storageLayerAggregate, PlanContext context) {
+            CostEstimate costEstimate = storageLayerAggregate.getRelation().accept(this, context);
+            // multiply a factor less than 1, so we can select PhysicalStorageLayerAggregate as far as possible
+            return new CostEstimate(costEstimate.getCpuCost() * 0.7, costEstimate.getMemoryCost(),
+                    costEstimate.getNetworkCost(), costEstimate.getPenalty());
+        }
+
+        @Override
+        public CostEstimate visitPhysicalFileScan(PhysicalFileScan physicalFileScan, PlanContext context) {
+            StatsDeriveResult statistics = context.getStatisticsWithCheck();
+            return CostEstimate.ofCpu(statistics.getRowCount());
         }
 
         @Override
@@ -111,9 +135,9 @@ public class CostCalculator {
             StatsDeriveResult childStatistics = context.getChildStatistics(0);
 
             return CostEstimate.of(
-                    childStatistics.computeSize(),
-                    statistics.computeSize(),
-                    childStatistics.computeSize());
+                    childStatistics.getRowCount(),
+                    statistics.getRowCount(),
+                    childStatistics.getRowCount());
         }
 
         @Override
@@ -123,9 +147,9 @@ public class CostCalculator {
             StatsDeriveResult childStatistics = context.getChildStatistics(0);
 
             return CostEstimate.of(
-                    childStatistics.computeSize(),
-                    statistics.computeSize(),
-                    childStatistics.computeSize());
+                    childStatistics.getRowCount(),
+                    statistics.getRowCount(),
+                    childStatistics.getRowCount());
         }
 
         @Override
@@ -136,8 +160,8 @@ public class CostCalculator {
             StatsDeriveResult childStatistics = context.getChildStatistics(0);
 
             return CostEstimate.of(
-                    childStatistics.computeSize(),
-                    statistics.computeSize(),
+                    childStatistics.getRowCount(),
+                    statistics.getRowCount(),
                     0);
         }
 
@@ -149,9 +173,9 @@ public class CostCalculator {
             // shuffle
             if (spec instanceof DistributionSpecHash) {
                 return CostEstimate.of(
-                        childStatistics.computeSize(),
+                        childStatistics.getRowCount(),
                         0,
-                        childStatistics.computeSize());
+                        childStatistics.getRowCount());
             }
 
             // replicate
@@ -159,53 +183,58 @@ public class CostCalculator {
                 int beNumber = ConnectContext.get().getEnv().getClusterInfo().getBackendIds(true).size();
                 int instanceNumber = ConnectContext.get().getSessionVariable().getParallelExecInstanceNum();
                 beNumber = Math.max(1, beNumber);
-
+                double memLimit = ConnectContext.get().getSessionVariable().getMaxExecMemByte();
+                //if build side is big, avoid use broadcast join
+                double rowsLimit = ConnectContext.get().getSessionVariable().getBroadcastRowCountLimit();
+                double brMemlimit = ConnectContext.get().getSessionVariable().getBroadcastHashtableMemLimitPercentage();
+                double buildSize = childStatistics.computeSize();
+                if (buildSize * instanceNumber > memLimit * brMemlimit
+                        || childStatistics.getRowCount() > rowsLimit) {
+                    return CostEstimate.of(Double.MAX_VALUE, Double.MAX_VALUE, Double.MAX_VALUE);
+                }
                 return CostEstimate.of(
-                        childStatistics.computeSize() * beNumber,
-                        childStatistics.computeSize() * beNumber * instanceNumber,
-                        childStatistics.computeSize() * beNumber * instanceNumber);
+                        childStatistics.getRowCount() * beNumber,
+                        childStatistics.getRowCount() * beNumber * instanceNumber,
+                        childStatistics.getRowCount() * beNumber * instanceNumber);
             }
 
             // gather
             if (spec instanceof DistributionSpecGather) {
                 return CostEstimate.of(
-                        childStatistics.computeSize(),
+                        childStatistics.getRowCount(),
                         0,
-                        childStatistics.computeSize());
+                        childStatistics.getRowCount());
             }
 
             // any
             return CostEstimate.of(
-                    childStatistics.computeSize(),
+                    childStatistics.getRowCount(),
                     0,
                     0);
         }
 
         @Override
-        public CostEstimate visitPhysicalAggregate(PhysicalAggregate<? extends Plan> aggregate, PlanContext context) {
+        public CostEstimate visitPhysicalHashAggregate(
+                PhysicalHashAggregate<? extends Plan> aggregate, PlanContext context) {
             // TODO: stage.....
 
             StatsDeriveResult statistics = context.getStatisticsWithCheck();
             StatsDeriveResult inputStatistics = context.getChildStatistics(0);
-            return CostEstimate.of(inputStatistics.computeSize(), statistics.computeSize(), 0);
+            return CostEstimate.of(inputStatistics.getRowCount(), statistics.getRowCount(), 0);
         }
 
         @Override
         public CostEstimate visitPhysicalHashJoin(
                 PhysicalHashJoin<? extends Plan, ? extends Plan> physicalHashJoin, PlanContext context) {
             Preconditions.checkState(context.getGroupExpression().arity() == 2);
-            Preconditions.checkState(context.getChildrenStats().size() == 2);
-
             StatsDeriveResult outputStats = physicalHashJoin.getGroupExpression().get().getOwnerGroup().getStatistics();
-            double outputRowCount = outputStats.computeSize();
+            double outputRowCount = outputStats.getRowCount();
 
             StatsDeriveResult probeStats = context.getChildStatistics(0);
             StatsDeriveResult buildStats = context.getChildStatistics(1);
-            List<Id> leftIds = context.getChildOutputIds(0);
-            List<Id> rightIds = context.getChildOutputIds(1);
 
-            double leftRowCount = probeStats.computeColumnSize(leftIds);
-            double rightRowCount = buildStats.computeColumnSize(rightIds);
+            double leftRowCount = probeStats.getRowCount();
+            double rightRowCount = buildStats.getRowCount();
             /*
             pattern1: L join1 (Agg1() join2 Agg2())
             result number of join2 may much less than Agg1.
@@ -240,14 +269,13 @@ public class CostCalculator {
                 PlanContext context) {
             // TODO: copy from physicalHashJoin, should update according to physical nested loop join properties.
             Preconditions.checkState(context.getGroupExpression().arity() == 2);
-            Preconditions.checkState(context.getChildrenStats().size() == 2);
 
             StatsDeriveResult leftStatistics = context.getChildStatistics(0);
             StatsDeriveResult rightStatistics = context.getChildStatistics(1);
 
             return CostEstimate.of(
-                    leftStatistics.computeSize() * rightStatistics.computeSize(),
-                    rightStatistics.computeSize(),
+                    leftStatistics.getRowCount() * rightStatistics.getRowCount(),
+                    rightStatistics.getRowCount(),
                     0);
         }
 
@@ -257,6 +285,16 @@ public class CostCalculator {
             return CostEstimate.of(
                     assertNumRows.getAssertNumRowsElement().getDesiredNumOfRows(),
                     assertNumRows.getAssertNumRowsElement().getDesiredNumOfRows(),
+                    0
+            );
+        }
+
+        @Override
+        public CostEstimate visitPhysicalGenerate(PhysicalGenerate<? extends Plan> generate, PlanContext context) {
+            StatsDeriveResult statistics = context.getStatisticsWithCheck();
+            return CostEstimate.of(
+                    statistics.getRowCount(),
+                    statistics.getRowCount(),
                     0
             );
         }

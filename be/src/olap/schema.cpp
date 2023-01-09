@@ -17,7 +17,6 @@
 
 #include "olap/schema.h"
 
-#include "olap/row_block2.h"
 #include "olap/uint24.h"
 #include "vec/columns/column_complex.h"
 #include "vec/columns/column_dictionary.h"
@@ -114,6 +113,18 @@ vectorized::DataTypePtr Schema::get_data_type_ptr(const Field& field) {
     return vectorized::DataTypeFactory::instance().create_data_type(field);
 }
 
+vectorized::IColumn::MutablePtr Schema::get_column_by_field(const Field& field) {
+    auto data_type_ptr = vectorized::DataTypeFactory::instance().create_data_type(field);
+    vectorized::IColumn::MutablePtr col_ptr = data_type_ptr->create_column();
+
+    if (field.is_nullable()) {
+        return doris::vectorized::ColumnNullable::create(std::move(col_ptr),
+                                                         doris::vectorized::ColumnUInt8::create());
+    }
+
+    return col_ptr;
+}
+
 vectorized::IColumn::MutablePtr Schema::get_predicate_column_nullable_ptr(const Field& field) {
     if (UNLIKELY(field.type() == OLAP_FIELD_TYPE_ARRAY)) {
         return get_data_type_ptr(field)->create_column();
@@ -179,8 +190,8 @@ vectorized::IColumn::MutablePtr Schema::get_predicate_column_ptr(FieldType type)
         return doris::vectorized::PredicateColumnType<TYPE_DECIMAL32>::create();
     case OLAP_FIELD_TYPE_DECIMAL64:
         return doris::vectorized::PredicateColumnType<TYPE_DECIMAL64>::create();
-    case OLAP_FIELD_TYPE_DECIMAL128:
-        return doris::vectorized::PredicateColumnType<TYPE_DECIMAL128>::create();
+    case OLAP_FIELD_TYPE_DECIMAL128I:
+        return doris::vectorized::PredicateColumnType<TYPE_DECIMAL128I>::create();
 
     default:
         LOG(FATAL) << "Unexpected type when choosing predicate column, type=" << type;

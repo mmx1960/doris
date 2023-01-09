@@ -23,6 +23,7 @@
 #include "exprs/function_filter.h"
 #include "io/file_factory.h"
 #include "runtime/tuple.h"
+#include "vec/exec/format/format_common.h"
 #include "vec/exec/format/generic_reader.h"
 #include "vec/exec/scan/vscanner.h"
 
@@ -33,7 +34,8 @@ class NewFileScanNode;
 class VFileScanner : public VScanner {
 public:
     VFileScanner(RuntimeState* state, NewFileScanNode* parent, int64_t limit,
-                 const TFileScanRange& scan_range, RuntimeProfile* profile);
+                 const TFileScanRange& scan_range, RuntimeProfile* profile,
+                 KVCache<string>& kv_cache);
 
     Status open(RuntimeState* state) override;
 
@@ -68,6 +70,7 @@ protected:
     std::map<std::string, int> _file_slot_name_map;
     // col names from _file_slot_descs
     std::vector<std::string> _file_col_names;
+
     // Partition source slot descriptors
     std::vector<SlotDescriptor*> _partition_slot_descs;
     // Partition slot id to index in _partition_slot_descs
@@ -106,6 +109,8 @@ protected:
     // Profile
     RuntimeProfile* _profile;
 
+    KVCache<std::string>& _kv_cache;
+
     bool _scanner_eof = false;
     int _rows = 0;
     int _num_of_columns_from_file;
@@ -135,6 +140,7 @@ private:
     Status _fill_missing_columns(size_t rows);
     Status _pre_filter_src_block();
     Status _convert_to_output_block(Block* block);
+    Status _generate_fill_columns();
 
     void _reset_counter() {
         _counter.num_rows_unselected = 0;

@@ -17,8 +17,9 @@
 
 package org.apache.doris.datasource;
 
-import org.apache.doris.catalog.HiveMetaStoreClientHelper;
+import org.apache.doris.catalog.HMSResource;
 import org.apache.doris.common.Config;
+import org.apache.doris.datasource.hive.event.MetastoreNotificationFetchException;
 
 import com.aliyun.datalake.metastore.hive2.ProxyMetaStoreClient;
 import com.google.common.base.Preconditions;
@@ -28,8 +29,11 @@ import org.apache.hadoop.hive.metastore.HiveMetaHookLoader;
 import org.apache.hadoop.hive.metastore.HiveMetaStoreClient;
 import org.apache.hadoop.hive.metastore.IMetaStoreClient;
 import org.apache.hadoop.hive.metastore.RetryingMetaStoreClient;
+import org.apache.hadoop.hive.metastore.api.ColumnStatisticsObj;
+import org.apache.hadoop.hive.metastore.api.CurrentNotificationEventId;
 import org.apache.hadoop.hive.metastore.api.FieldSchema;
 import org.apache.hadoop.hive.metastore.api.MetaException;
+import org.apache.hadoop.hive.metastore.api.NotificationEventResponse;
 import org.apache.hadoop.hive.metastore.api.Partition;
 import org.apache.hadoop.hive.metastore.api.Table;
 import org.apache.logging.log4j.LogManager;
@@ -37,6 +41,7 @@ import org.apache.logging.log4j.Logger;
 
 import java.util.LinkedList;
 import java.util.List;
+import java.util.Map;
 import java.util.Queue;
 
 /**
@@ -126,12 +131,53 @@ public class PooledHiveMetaStoreClient {
         }
     }
 
+    public List<ColumnStatisticsObj> getTableColumnStatistics(String dbName, String tblName, List<String> columns) {
+        try (CachedClient client = getClient()) {
+            return client.client.getTableColumnStatistics(dbName, tblName, columns);
+        } catch (Exception e) {
+            throw new RuntimeException(e);
+        }
+    }
+
+    public Map<String, List<ColumnStatisticsObj>> getPartitionColumnStatistics(
+            String dbName, String tblName, List<String> partNames, List<String> columns) {
+        try (CachedClient client = getClient()) {
+            return client.client.getPartitionColumnStatistics(dbName, tblName, partNames, columns);
+        } catch (Exception e) {
+            throw new RuntimeException(e);
+        }
+    }
+
+    public CurrentNotificationEventId getCurrentNotificationEventId() {
+        try (CachedClient client = getClient()) {
+            return client.client.getCurrentNotificationEventId();
+        } catch (Exception e) {
+            LOG.warn("Failed to fetch current notification event id", e);
+            throw new MetastoreNotificationFetchException(
+                    "Failed to get current notification event id. msg: " + e.getMessage());
+        }
+    }
+
+    public NotificationEventResponse getNextNotification(long lastEventId,
+            int maxEvents,
+            IMetaStoreClient.NotificationFilter filter)
+            throws MetastoreNotificationFetchException {
+        try (CachedClient client = getClient()) {
+            return client.client.getNextNotification(lastEventId, maxEvents, filter);
+        } catch (Exception e) {
+            LOG.warn("Failed to get next notification based on last event id {}", lastEventId, e);
+            throw new MetastoreNotificationFetchException(
+                    "Failed to get next notification based on last event id: " + lastEventId + ". msg: " + e
+                            .getMessage());
+        }
+    }
+
     private class CachedClient implements AutoCloseable {
         private final IMetaStoreClient client;
 
         private CachedClient(HiveConf hiveConf) throws MetaException {
-            String type = hiveConf.get(HiveMetaStoreClientHelper.HIVE_METASTORE_TYPE);
-            if (HiveMetaStoreClientHelper.DLF_TYPE.equalsIgnoreCase(type)) {
+            String type = hiveConf.get(HMSResource.HIVE_METASTORE_TYPE);
+            if (HMSResource.DLF_TYPE.equalsIgnoreCase(type)) {
                 client = RetryingMetaStoreClient.getProxy(hiveConf, DUMMY_HOOK_LOADER,
                         ProxyMetaStoreClient.class.getName());
             } else {
@@ -153,12 +199,19 @@ public class PooledHiveMetaStoreClient {
     }
 
     private CachedClient getClient() throws MetaException {
-        synchronized (clientPool) {
-            CachedClient client = clientPool.poll();
-            if (client == null) {
-                return new CachedClient(hiveConf);
+        ClassLoader classLoader = Thread.currentThread().getContextClassLoader();
+        try {
+            Thread.currentThread().setContextClassLoader(ClassLoader.getSystemClassLoader());
+            synchronized (clientPool) {
+                CachedClient client = clientPool.poll();
+                if (client == null) {
+                    return new CachedClient(hiveConf);
+                }
+                return client;
             }
-            return client;
+        } finally {
+            Thread.currentThread().setContextClassLoader(classLoader);
         }
     }
 }
+

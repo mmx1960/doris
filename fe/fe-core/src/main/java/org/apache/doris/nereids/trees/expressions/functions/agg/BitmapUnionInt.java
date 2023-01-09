@@ -17,18 +17,17 @@
 
 package org.apache.doris.nereids.trees.expressions.functions.agg;
 
+import org.apache.doris.catalog.FunctionSignature;
 import org.apache.doris.nereids.trees.expressions.Expression;
-import org.apache.doris.nereids.trees.expressions.functions.PropagateNullable;
+import org.apache.doris.nereids.trees.expressions.functions.AlwaysNotNullable;
+import org.apache.doris.nereids.trees.expressions.functions.ExplicitlyCastableSignature;
 import org.apache.doris.nereids.trees.expressions.shape.UnaryExpression;
-import org.apache.doris.nereids.trees.expressions.typecoercion.ImplicitCastInputTypes;
 import org.apache.doris.nereids.types.BigIntType;
 import org.apache.doris.nereids.types.BitmapType;
 import org.apache.doris.nereids.types.DataType;
 import org.apache.doris.nereids.types.IntegerType;
 import org.apache.doris.nereids.types.SmallIntType;
 import org.apache.doris.nereids.types.TinyIntType;
-import org.apache.doris.nereids.types.coercion.AbstractDataType;
-import org.apache.doris.nereids.types.coercion.TypeCollection;
 
 import com.google.common.base.Preconditions;
 import com.google.common.collect.ImmutableList;
@@ -37,43 +36,36 @@ import java.util.List;
 
 /** BitmapUnionInt */
 public class BitmapUnionInt extends AggregateFunction
-        implements UnaryExpression, PropagateNullable, ImplicitCastInputTypes {
+        implements UnaryExpression, AlwaysNotNullable, ExplicitlyCastableSignature {
+    public static final List<FunctionSignature> SIGNATURES = ImmutableList.of(
+            FunctionSignature.ret(BigIntType.INSTANCE).args(SmallIntType.INSTANCE),
+            FunctionSignature.ret(BigIntType.INSTANCE).args(TinyIntType.INSTANCE),
+            FunctionSignature.ret(BigIntType.INSTANCE).args(IntegerType.INSTANCE),
+            FunctionSignature.ret(BigIntType.INSTANCE).args(BigIntType.INSTANCE)
+    );
+
     public BitmapUnionInt(Expression arg0) {
         super("bitmap_union_int", arg0);
     }
 
-    public BitmapUnionInt(AggregateParam aggregateParam, Expression arg0) {
-        super("bitmap_union_int", aggregateParam, arg0);
+    @Override
+    protected List<DataType> intermediateTypes() {
+        return ImmutableList.of(BitmapType.INSTANCE);
+    }
+
+    @Override
+    public BitmapUnionInt withDistinctAndChildren(boolean isDistinct, List<Expression> children) {
+        return withChildren(children);
     }
 
     @Override
     public BitmapUnionInt withChildren(List<Expression> children) {
         Preconditions.checkArgument(children.size() == 1);
-        return new BitmapUnionInt(getAggregateParam(), children.get(0));
+        return new BitmapUnionInt(children.get(0));
     }
 
     @Override
-    public List<AbstractDataType> expectedInputTypes() {
-        if (isGlobal() && inputTypesBeforeDissemble().isPresent()) {
-            return ImmutableList.of();
-        } else {
-            return ImmutableList.of(new TypeCollection(
-                    TinyIntType.INSTANCE, SmallIntType.INSTANCE, IntegerType.INSTANCE, BigIntType.INSTANCE));
-        }
-    }
-
-    @Override
-    public DataType getFinalType() {
-        return BigIntType.INSTANCE;
-    }
-
-    @Override
-    public DataType getIntermediateType() {
-        return BitmapType.INSTANCE;
-    }
-
-    @Override
-    public BitmapUnionInt withAggregateParam(AggregateParam aggregateParam) {
-        return new BitmapUnionInt(aggregateParam, child());
+    public List<FunctionSignature> getSignatures() {
+        return SIGNATURES;
     }
 }

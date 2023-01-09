@@ -83,6 +83,12 @@ public class PlanFragment extends TreeNode<PlanFragment> {
 
     // id for this plan fragment
     private PlanFragmentId fragmentId;
+    // nereids planner and original planner generate fragments in different order.
+    // This makes nereids fragment id different from that of original planner, and
+    // hence different from that in profile.
+    // in original planner, fragmentSequenceNum is fragmentId, and in nereids planner,
+    // fragmentSequenceNum is the id displayed in profile
+    private int fragmentSequenceNum;
     // private PlanId planId_;
     // private CohortId cohortId_;
 
@@ -138,6 +144,8 @@ public class PlanFragment extends TreeNode<PlanFragment> {
 
     // has colocate plan node
     private boolean hasColocatePlanNode = false;
+
+    private boolean isRightChildOfBroadcastHashJoin = false;
 
     /**
      * C'tor for fragment with specific partition; the output is by default broadcast.
@@ -223,6 +231,10 @@ public class PlanFragment extends TreeNode<PlanFragment> {
 
     public boolean hasColocatePlanNode() {
         return hasColocatePlanNode;
+    }
+
+    public void setDataPartition(DataPartition dataPartition) {
+        this.dataPartition = dataPartition;
     }
 
     /**
@@ -413,5 +425,25 @@ public class PlanFragment extends TreeNode<PlanFragment> {
 
     public boolean isTransferQueryStatisticsWithEveryBatch() {
         return transferQueryStatisticsWithEveryBatch;
+    }
+
+    public boolean isRightChildOfBroadcastHashJoin() {
+        return isRightChildOfBroadcastHashJoin;
+    }
+
+    public void setRightChildOfBroadcastHashJoin(boolean value) {
+        isRightChildOfBroadcastHashJoin = value;
+    }
+
+    public int getFragmentSequenceNum() {
+        if (ConnectContext.get().getSessionVariable().isEnableNereidsPlanner()) {
+            return fragmentSequenceNum;
+        } else {
+            return fragmentId.asInt();
+        }
+    }
+
+    public void setFragmentSequenceNum(int seq) {
+        fragmentSequenceNum = seq;
     }
 }

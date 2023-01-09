@@ -23,33 +23,47 @@ import org.apache.doris.nereids.analyzer.UnboundTVFRelation;
 import org.apache.doris.nereids.trees.plans.GroupPlan;
 import org.apache.doris.nereids.trees.plans.Plan;
 import org.apache.doris.nereids.trees.plans.commands.Command;
+import org.apache.doris.nereids.trees.plans.commands.CreatePolicyCommand;
 import org.apache.doris.nereids.trees.plans.commands.ExplainCommand;
 import org.apache.doris.nereids.trees.plans.logical.LogicalAggregate;
 import org.apache.doris.nereids.trees.plans.logical.LogicalApply;
 import org.apache.doris.nereids.trees.plans.logical.LogicalAssertNumRows;
 import org.apache.doris.nereids.trees.plans.logical.LogicalCTE;
+import org.apache.doris.nereids.trees.plans.logical.LogicalCheckPolicy;
 import org.apache.doris.nereids.trees.plans.logical.LogicalEmptyRelation;
+import org.apache.doris.nereids.trees.plans.logical.LogicalExcept;
+import org.apache.doris.nereids.trees.plans.logical.LogicalFileScan;
 import org.apache.doris.nereids.trees.plans.logical.LogicalFilter;
+import org.apache.doris.nereids.trees.plans.logical.LogicalGenerate;
 import org.apache.doris.nereids.trees.plans.logical.LogicalHaving;
+import org.apache.doris.nereids.trees.plans.logical.LogicalIntersect;
 import org.apache.doris.nereids.trees.plans.logical.LogicalJoin;
 import org.apache.doris.nereids.trees.plans.logical.LogicalLimit;
 import org.apache.doris.nereids.trees.plans.logical.LogicalOlapScan;
 import org.apache.doris.nereids.trees.plans.logical.LogicalOneRowRelation;
 import org.apache.doris.nereids.trees.plans.logical.LogicalProject;
 import org.apache.doris.nereids.trees.plans.logical.LogicalRelation;
+import org.apache.doris.nereids.trees.plans.logical.LogicalRepeat;
+import org.apache.doris.nereids.trees.plans.logical.LogicalSchemaScan;
 import org.apache.doris.nereids.trees.plans.logical.LogicalSelectHint;
+import org.apache.doris.nereids.trees.plans.logical.LogicalSetOperation;
 import org.apache.doris.nereids.trees.plans.logical.LogicalSort;
 import org.apache.doris.nereids.trees.plans.logical.LogicalSubQueryAlias;
 import org.apache.doris.nereids.trees.plans.logical.LogicalTVFRelation;
 import org.apache.doris.nereids.trees.plans.logical.LogicalTopN;
+import org.apache.doris.nereids.trees.plans.logical.LogicalUnion;
 import org.apache.doris.nereids.trees.plans.physical.AbstractPhysicalJoin;
 import org.apache.doris.nereids.trees.plans.physical.AbstractPhysicalSort;
-import org.apache.doris.nereids.trees.plans.physical.PhysicalAggregate;
 import org.apache.doris.nereids.trees.plans.physical.PhysicalAssertNumRows;
 import org.apache.doris.nereids.trees.plans.physical.PhysicalDistribute;
 import org.apache.doris.nereids.trees.plans.physical.PhysicalEmptyRelation;
+import org.apache.doris.nereids.trees.plans.physical.PhysicalExcept;
+import org.apache.doris.nereids.trees.plans.physical.PhysicalFileScan;
 import org.apache.doris.nereids.trees.plans.physical.PhysicalFilter;
+import org.apache.doris.nereids.trees.plans.physical.PhysicalGenerate;
+import org.apache.doris.nereids.trees.plans.physical.PhysicalHashAggregate;
 import org.apache.doris.nereids.trees.plans.physical.PhysicalHashJoin;
+import org.apache.doris.nereids.trees.plans.physical.PhysicalIntersect;
 import org.apache.doris.nereids.trees.plans.physical.PhysicalLimit;
 import org.apache.doris.nereids.trees.plans.physical.PhysicalLocalQuickSort;
 import org.apache.doris.nereids.trees.plans.physical.PhysicalNestedLoopJoin;
@@ -58,8 +72,13 @@ import org.apache.doris.nereids.trees.plans.physical.PhysicalOneRowRelation;
 import org.apache.doris.nereids.trees.plans.physical.PhysicalProject;
 import org.apache.doris.nereids.trees.plans.physical.PhysicalQuickSort;
 import org.apache.doris.nereids.trees.plans.physical.PhysicalRelation;
+import org.apache.doris.nereids.trees.plans.physical.PhysicalRepeat;
+import org.apache.doris.nereids.trees.plans.physical.PhysicalSchemaScan;
+import org.apache.doris.nereids.trees.plans.physical.PhysicalSetOperation;
+import org.apache.doris.nereids.trees.plans.physical.PhysicalStorageLayerAggregate;
 import org.apache.doris.nereids.trees.plans.physical.PhysicalTVFRelation;
 import org.apache.doris.nereids.trees.plans.physical.PhysicalTopN;
+import org.apache.doris.nereids.trees.plans.physical.PhysicalUnion;
 
 /**
  * Base class for the processing of logical and physical plan.
@@ -80,6 +99,10 @@ public abstract class PlanVisitor<R, C> {
     }
 
     public R visitExplainCommand(ExplainCommand explain, C context) {
+        return visitCommand(explain, context);
+    }
+
+    public R visitCreatePolicyCommand(CreatePolicyCommand explain, C context) {
         return visitCommand(explain, context);
     }
 
@@ -127,12 +150,28 @@ public abstract class PlanVisitor<R, C> {
         return visit(aggregate, context);
     }
 
+    public R visitLogicalRepeat(LogicalRepeat<? extends Plan> repeat, C context) {
+        return visit(repeat, context);
+    }
+
     public R visitLogicalFilter(LogicalFilter<? extends Plan> filter, C context) {
         return visit(filter, context);
     }
 
+    public R visitLogicalCheckPolicy(LogicalCheckPolicy<? extends Plan> checkPolicy, C context) {
+        return visit(checkPolicy, context);
+    }
+
     public R visitLogicalOlapScan(LogicalOlapScan olapScan, C context) {
         return visitLogicalRelation(olapScan, context);
+    }
+
+    public R visitLogicalSchemaScan(LogicalSchemaScan schemaScan, C context) {
+        return visitLogicalRelation(schemaScan, context);
+    }
+
+    public R visitLogicalFileScan(LogicalFileScan fileScan, C context) {
+        return visitLogicalRelation(fileScan, context);
     }
 
     public R visitLogicalTVFRelation(LogicalTVFRelation tvfRelation, C context) {
@@ -171,16 +210,41 @@ public abstract class PlanVisitor<R, C> {
         return visit(assertNumRows, context);
     }
 
-    public R visitLogicalHaving(LogicalHaving<Plan> having, C context) {
+    public R visitLogicalHaving(LogicalHaving<? extends Plan> having, C context) {
         return visit(having, context);
+    }
+
+    public R visitLogicalSetOperation(
+            LogicalSetOperation logicalSetOperation, C context) {
+        return visit(logicalSetOperation, context);
+    }
+
+    public R visitLogicalUnion(LogicalUnion union, C context) {
+        return visitLogicalSetOperation(union, context);
+    }
+
+    public R visitLogicalExcept(LogicalExcept except, C context) {
+        return visitLogicalSetOperation(except, context);
+    }
+
+    public R visitLogicalIntersect(LogicalIntersect intersect, C context) {
+        return visitLogicalSetOperation(intersect, context);
+    }
+
+    public R visitLogicalGenerate(LogicalGenerate<? extends Plan> generate, C context) {
+        return visit(generate, context);
     }
 
     // *******************************
     // Physical plans
     // *******************************
 
-    public R visitPhysicalAggregate(PhysicalAggregate<? extends Plan> agg, C context) {
+    public R visitPhysicalHashAggregate(PhysicalHashAggregate<? extends Plan> agg, C context) {
         return visit(agg, context);
+    }
+
+    public R visitPhysicalRepeat(PhysicalRepeat<? extends Plan> repeat, C context) {
+        return visit(repeat, context);
     }
 
     public R visitPhysicalScan(PhysicalRelation scan, C context) {
@@ -197,6 +261,18 @@ public abstract class PlanVisitor<R, C> {
 
     public R visitPhysicalOlapScan(PhysicalOlapScan olapScan, C context) {
         return visitPhysicalScan(olapScan, context);
+    }
+
+    public R visitPhysicalSchemaScan(PhysicalSchemaScan schemaScan, C context) {
+        return visitPhysicalScan(schemaScan, context);
+    }
+
+    public R visitPhysicalFileScan(PhysicalFileScan fileScan, C context) {
+        return visitPhysicalScan(fileScan, context);
+    }
+
+    public R visitPhysicalStorageLayerAggregate(PhysicalStorageLayerAggregate storageLayerAggregate, C context) {
+        return storageLayerAggregate.getRelation().accept(this, context);
     }
 
     public R visitPhysicalTVFRelation(PhysicalTVFRelation tvfRelation, C context) {
@@ -238,6 +314,26 @@ public abstract class PlanVisitor<R, C> {
 
     public R visitPhysicalFilter(PhysicalFilter<? extends Plan> filter, C context) {
         return visit(filter, context);
+    }
+
+    public R visitPhysicalSetOperation(PhysicalSetOperation setOperation, C context) {
+        return visit(setOperation, context);
+    }
+
+    public R visitPhysicalUnion(PhysicalUnion union, C context) {
+        return visitPhysicalSetOperation(union, context);
+    }
+
+    public R visitPhysicalExcept(PhysicalExcept except, C context) {
+        return visitPhysicalSetOperation(except, context);
+    }
+
+    public R visitPhysicalIntersect(PhysicalIntersect intersect, C context) {
+        return visitPhysicalSetOperation(intersect, context);
+    }
+
+    public R visitPhysicalGenerate(PhysicalGenerate<? extends Plan> generate, C context) {
+        return visit(generate, context);
     }
 
     // *******************************

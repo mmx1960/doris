@@ -18,7 +18,7 @@
 #include <glog/logging.h>
 #include <gtest/gtest.h>
 
-#include "io/local_file_reader.h"
+#include "io/fs/local_file_system.h"
 #include "runtime/runtime_state.h"
 #include "util/runtime_profile.h"
 #include "vec/data_types/data_type_factory.hpp"
@@ -89,8 +89,9 @@ TEST_F(ParquetReaderTest, normal) {
     DescriptorTbl::create(&obj_pool, t_desc_table, &desc_tbl);
 
     auto slot_descs = desc_tbl->get_tuple_descriptor(0)->slots();
-    LocalFileReader* reader =
-            new LocalFileReader("./be/test/exec/test_data/parquet_scanner/type-decoder.parquet", 0);
+    io::FileSystemSPtr local_fs = std::make_shared<io::LocalFileSystem>("");
+    io::FileReaderSPtr reader;
+    local_fs->open_file("./be/test/exec/test_data/parquet_scanner/type-decoder.parquet", &reader);
 
     cctz::time_zone ctz;
     TimezoneUtils::find_cctz_time_zone(TimezoneUtils::default_time_zone, ctz);
@@ -105,14 +106,18 @@ TEST_F(ParquetReaderTest, normal) {
         scan_range.start_offset = 0;
         scan_range.size = 1000;
     }
-    auto p_reader = new ParquetReader(nullptr, scan_params, scan_range, column_names, 992, &ctz);
+    auto p_reader = new ParquetReader(nullptr, scan_params, scan_range, 992, &ctz);
     p_reader->set_file_reader(reader);
     RuntimeState runtime_state((TQueryGlobals()));
     runtime_state.set_desc_tbl(desc_tbl);
     runtime_state.init_mem_trackers();
 
     std::unordered_map<std::string, ColumnValueRangeType> colname_to_value_range;
-    p_reader->init_reader(&colname_to_value_range, nullptr);
+    p_reader->init_reader(column_names, nullptr, nullptr);
+    std::unordered_map<std::string, std::tuple<std::string, const SlotDescriptor*>>
+            partition_columns;
+    std::unordered_map<std::string, VExprContext*> missing_columns;
+    p_reader->set_fill_columns(partition_columns, missing_columns);
     Block* block = new Block();
     for (const auto& slot_desc : tuple_desc->slots()) {
         auto data_type =

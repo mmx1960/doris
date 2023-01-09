@@ -176,6 +176,10 @@ Note that the comment must start with /*+ and can only follow the SELECT.
 
     Used for compatibility with MySQL clients. No practical effect.
 
+* `default_order_by_limit`
+
+  Used to control the default number of items returned after OrderBy. The default value is -1, and the maximum number of records after the query is returned by default, and the upper limit is the MAX_VALUE of the long data type.
+
 * `delete_without_partition`
 
     When set to true. When using the delete command to delete partition table data, no partition is required. The delete operation will be automatically applied to all partitions.
@@ -523,10 +527,12 @@ Translated with www.DeepL.com/Translator (free version)
   Used to control whether trim the tailing spaces while quering Hive external tables. The default is false.
 
 * `skip_storage_engine_merge`
-  For debugging purpose. In vectorized execution engine, in case of problems of reading data of Aggregate Key model and Unique Key model, setting value to `true` will read data as Duplicate Key model.
+
+    For debugging purpose. In vectorized execution engine, in case of problems of reading data of Aggregate Key model and Unique Key model, setting value to `true` will read data as Duplicate Key model.
 
 * `skip_delete_predicate`
-  For debugging purpose. In vectorized execution engine, in case of problems of reading data, setting value to `true` will also read deleted data.
+
+    For debugging purpose. In vectorized execution engine, in case of problems of reading data, setting value to `true` will also read deleted data.
 
 * `default_password_lifetime`
 
@@ -549,3 +555,12 @@ Translated with www.DeepL.com/Translator (free version)
 * `validate_password_policy`
 
 	Password strength verification policy. Defaults to `NONE` or `0`, i.e. no verification. Can be set to `STRONG` or `2`. When set to `STRONG` or `2`, when setting a password via the `ALTER USER` or `SET PASSWORD` commands, the password must contain any of "uppercase letters", "lowercase letters", "numbers" and "special characters". 3 items, and the length must be greater than or equal to 8. Special characters include: `~!@#$%^&*()_+|<>,.?/:;'[]{}"`.
+
+* `group_concat_max_len`
+
+    For compatible purpose. This variable has no effect, just enable some BI tools can query or set this session variable sucessfully.
+
+* `rewrite_or_to_in_predicate_threshold`
+
+    The default threshold of rewriting OR to IN. The default value is 2, which means that when there are 2 ORs, if they can be compact, they will be rewritten as IN predicate.
+

@@ -17,14 +17,15 @@
 
 package org.apache.doris.nereids.trees.expressions.functions.agg;
 
+import org.apache.doris.catalog.FunctionSignature;
 import org.apache.doris.nereids.trees.expressions.Expression;
-import org.apache.doris.nereids.trees.expressions.functions.PropagateNullable;
+import org.apache.doris.nereids.trees.expressions.functions.AlwaysNotNullable;
+import org.apache.doris.nereids.trees.expressions.functions.ExplicitlyCastableSignature;
 import org.apache.doris.nereids.trees.expressions.shape.UnaryExpression;
-import org.apache.doris.nereids.trees.expressions.typecoercion.ImplicitCastInputTypes;
+import org.apache.doris.nereids.trees.expressions.visitor.ExpressionVisitor;
 import org.apache.doris.nereids.types.BigIntType;
 import org.apache.doris.nereids.types.BitmapType;
 import org.apache.doris.nereids.types.DataType;
-import org.apache.doris.nereids.types.coercion.AbstractDataType;
 
 import com.google.common.base.Preconditions;
 import com.google.common.collect.ImmutableList;
@@ -33,38 +34,38 @@ import java.util.List;
 
 /** BitmapUnionCount */
 public class BitmapUnionCount extends AggregateFunction
-        implements UnaryExpression, PropagateNullable, ImplicitCastInputTypes {
+        implements UnaryExpression, AlwaysNotNullable, ExplicitlyCastableSignature {
+    public static final List<FunctionSignature> SIGNATURES = ImmutableList.of(
+            FunctionSignature.ret(BigIntType.INSTANCE).args(BitmapType.INSTANCE)
+    );
+
     public BitmapUnionCount(Expression arg0) {
         super("bitmap_union_count", arg0);
     }
 
-    public BitmapUnionCount(AggregateParam aggregateParam, Expression arg0) {
-        super("bitmap_union_count", aggregateParam, arg0);
+    @Override
+    protected List<DataType> intermediateTypes() {
+        return ImmutableList.of(BitmapType.INSTANCE);
+    }
+
+    @Override
+    public BitmapUnionCount withDistinctAndChildren(boolean isDistinct, List<Expression> children) {
+        return withChildren(children);
     }
 
     @Override
     public BitmapUnionCount withChildren(List<Expression> children) {
         Preconditions.checkArgument(children.size() == 1);
-        return new BitmapUnionCount(getAggregateParam(), children.get(0));
+        return new BitmapUnionCount(children.get(0));
     }
 
     @Override
-    public List<AbstractDataType> expectedInputTypes() {
-        return ImmutableList.of(BitmapType.INSTANCE);
+    public List<FunctionSignature> getSignatures() {
+        return SIGNATURES;
     }
 
     @Override
-    public DataType getFinalType() {
-        return BigIntType.INSTANCE;
-    }
-
-    @Override
-    public DataType getIntermediateType() {
-        return BitmapType.INSTANCE;
-    }
-
-    @Override
-    public BitmapUnionCount withAggregateParam(AggregateParam aggregateParam) {
-        return new BitmapUnionCount(aggregateParam, child());
+    public <R, C> R accept(ExpressionVisitor<R, C> visitor, C context) {
+        return visitor.visitBitmapUnionCount(this, context);
     }
 }

@@ -33,6 +33,14 @@
 namespace doris {
 namespace vectorized {
 
+std::string MysqlConnInfo::debug_string() const {
+    std::stringstream ss;
+
+    ss << "(host=" << host << ",port=" << port << ",user=" << user << ",db=" << db
+       << ",passwd=" << passwd << ",charset=" << charset << ")";
+    return ss.str();
+}
+
 VMysqlTableWriter::VMysqlTableWriter(const std::vector<vectorized::VExprContext*>& output_expr_ctxs)
         : _vec_output_expr_ctxs(output_expr_ctxs) {}
 
@@ -176,7 +184,7 @@ Status VMysqlTableWriter::insert_row(vectorized::Block& block, size_t row) {
         }
         case TYPE_DECIMAL32:
         case TYPE_DECIMAL64:
-        case TYPE_DECIMAL128: {
+        case TYPE_DECIMAL128I: {
             auto val = type_ptr->to_string(*column, row);
             fmt::format_to(_insert_stmt_buffer, "{}", val);
             break;

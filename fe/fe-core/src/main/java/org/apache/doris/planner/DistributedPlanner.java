@@ -205,8 +205,8 @@ public class DistributedPlanner {
             Preconditions.checkState(childFragments.size() == 2);
             result = createHashJoinFragment((HashJoinNode) root,
                     childFragments.get(1), childFragments.get(0), fragments);
-        } else if (root instanceof CrossJoinNode) {
-            result = createCrossJoinFragment((CrossJoinNode) root, childFragments.get(1),
+        } else if (root instanceof NestedLoopJoinNode) {
+            result = createNestedLoopJoinFragment((NestedLoopJoinNode) root, childFragments.get(1),
                     childFragments.get(0));
         } else if (root instanceof SelectNode) {
             result = createSelectNodeFragment((SelectNode) root, childFragments);
@@ -236,7 +236,8 @@ public class DistributedPlanner {
         // move 'result' to end, it depends on all of its children
         fragments.remove(result);
         fragments.add(result);
-        if (!isPartitioned && result.isPartitioned() && result.getPlanRoot().getNumInstances() > 1) {
+        if ((!isPartitioned && result.isPartitioned() && result.getPlanRoot().getNumInstances() > 1)
+                || (!(root instanceof SortNode) && root.hasOffset())) {
             result = createMergeFragment(result);
             fragments.add(result);
         }
@@ -251,11 +252,17 @@ public class DistributedPlanner {
      */
     private PlanFragment createMergeFragment(PlanFragment inputFragment)
             throws UserException {
-        Preconditions.checkState(inputFragment.isPartitioned());
+        Preconditions.checkState(inputFragment.isPartitioned() || inputFragment.getPlanRoot().hasOffset());
 
         // exchange node clones the behavior of its input, aside from the conjuncts
         ExchangeNode mergePlan =
                 new ExchangeNode(ctx.getNextNodeId(), inputFragment.getPlanRoot(), false);
+        PlanNode inputRoot = inputFragment.getPlanRoot();
+        if (inputRoot.hasOffset()) {
+            long limit = inputRoot.getOffset() + inputRoot.getLimit();
+            inputRoot.unsetLimit();
+            inputRoot.setLimit(limit);
+        }
         mergePlan.setNumInstances(inputFragment.getPlanRoot().getNumInstances());
         mergePlan.init(ctx.getRootAnalyzer());
         Preconditions.checkState(mergePlan.hasValidStats());
@@ -378,6 +385,7 @@ public class DistributedPlanner {
             node.setChild(0, leftChildFragment.getPlanRoot());
             connectChildFragment(node, 1, leftChildFragment, rightChildFragment);
             leftChildFragment.setPlanRoot(node);
+            rightChildFragment.setRightChildOfBroadcastHashJoin(true);
             return leftChildFragment;
         } else {
             node.setDistributionMode(HashJoinNode.DistributionMode.PARTITIONED);
@@ -489,7 +497,7 @@ public class DistributedPlanner {
             return null;
         }
         ScanNode scanNode = planFragment.getPlanRoot()
-                .getScanNodeInOneFragmentByTupleId(slotRef.getDesc().getParent().getId());
+                .getScanNodeInOneFragmentBySlotRef(slotRef);
         if (scanNode == null) {
             cannotReason.add(DistributedPlanColocateRule.REDISTRIBUTED_SRC_DATA);
             return null;
@@ -656,7 +664,7 @@ public class DistributedPlanner {
                     continue;
                 }
 
-                SlotRef leftSlot = lhsJoinExpr.unwrapSlotRef();
+                SlotRef leftSlot = node.getChild(0).findSrcSlotRef(lhsJoinExpr.getSrcSlotRef());
                 if (leftSlot.getTable() instanceof OlapTable
                         && leftScanNode.desc.getSlots().contains(leftSlot.getDesc())) {
                     // table name in SlotRef is not the really name. `select * from test as t`
@@ -697,16 +705,42 @@ public class DistributedPlanner {
      * Modifies the leftChildFragment to execute a cross join. The right child input is provided by an ExchangeNode,
      * which is the destination of the rightChildFragment's output.
      */
-    private PlanFragment createCrossJoinFragment(
-            CrossJoinNode node, PlanFragment rightChildFragment, PlanFragment leftChildFragment)
+    private PlanFragment createNestedLoopJoinFragment(
+            NestedLoopJoinNode node, PlanFragment rightChildFragment, PlanFragment leftChildFragment)
             throws UserException {
-        // The rhs tree is going to send data through an exchange node which effectively
-        // compacts the data. No reason to do it again at the rhs root node.
-        rightChildFragment.getPlanRoot().setCompactData(false);
-        node.setChild(0, leftChildFragment.getPlanRoot());
-        connectChildFragment(node, 1, leftChildFragment, rightChildFragment);
-        leftChildFragment.setPlanRoot(node);
-        return leftChildFragment;
+        if (node.canParallelize()) {
+            // The rhs tree is going to send data through an exchange node which effectively
+            // compacts the data. No reason to do it again at the rhs root node.
+            rightChildFragment.getPlanRoot().setCompactData(false);
+            node.setChild(0, leftChildFragment.getPlanRoot());
+            connectChildFragment(node, 1, leftChildFragment, rightChildFragment);
+            leftChildFragment.setPlanRoot(node);
+            return leftChildFragment;
+        } else {
+            // For non-equal nljoin, we should make sure using only one instance to do processing.
+            DataPartition lhsJoinPartition = new DataPartition(TPartitionType.UNPARTITIONED);
+            ExchangeNode lhsExchange =
+                    new ExchangeNode(ctx.getNextNodeId(), leftChildFragment.getPlanRoot(), false);
+            lhsExchange.setNumInstances(1);
+            lhsExchange.init(ctx.getRootAnalyzer());
+
+            DataPartition rhsJoinPartition =
+                    new DataPartition(TPartitionType.UNPARTITIONED);
+            ExchangeNode rhsExchange =
+                    new ExchangeNode(ctx.getNextNodeId(), rightChildFragment.getPlanRoot(), false);
+            rhsExchange.setNumInstances(1);
+            rhsExchange.init(ctx.getRootAnalyzer());
+
+            node.setChild(0, lhsExchange);
+            node.setChild(1, rhsExchange);
+            PlanFragment joinFragment = new PlanFragment(ctx.getNextFragmentId(), node, lhsJoinPartition);
+            // connect the child fragments
+            leftChildFragment.setDestination(lhsExchange);
+            leftChildFragment.setOutputPartition(lhsJoinPartition);
+            rightChildFragment.setDestination(rhsExchange);
+            rightChildFragment.setOutputPartition(rhsJoinPartition);
+            return joinFragment;
+        }
     }
 
     /**

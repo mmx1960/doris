@@ -17,54 +17,73 @@
 
 package org.apache.doris.nereids.trees.expressions.functions.agg;
 
+import org.apache.doris.nereids.exceptions.UnboundException;
 import org.apache.doris.nereids.trees.expressions.Expression;
 import org.apache.doris.nereids.trees.expressions.functions.BoundFunction;
+import org.apache.doris.nereids.trees.expressions.typecoercion.ExpectsInputTypes;
 import org.apache.doris.nereids.trees.expressions.visitor.ExpressionVisitor;
 import org.apache.doris.nereids.types.DataType;
+import org.apache.doris.nereids.types.PartialAggType;
+import org.apache.doris.nereids.types.VarcharType;
+import org.apache.doris.nereids.types.coercion.AbstractDataType;
+
+import com.google.common.collect.ImmutableList;
 
 import java.util.List;
 import java.util.Objects;
-import java.util.Optional;
+import java.util.stream.Collectors;
 
 /**
  * The function which consume arguments in lots of rows and product one value.
  */
-public abstract class AggregateFunction extends BoundFunction {
+public abstract class AggregateFunction extends BoundFunction implements ExpectsInputTypes {
 
-    private final AggregateParam aggregateParam;
+    protected final boolean isDistinct;
 
     public AggregateFunction(String name, Expression... arguments) {
-        this(name, AggregateParam.global(), arguments);
+        this(name, false, arguments);
     }
 
-    public AggregateFunction(String name, AggregateParam aggregateParam, Expression... arguments) {
+    public AggregateFunction(String name, boolean isDistinct, Expression... arguments) {
         super(name, arguments);
-        this.aggregateParam = Objects.requireNonNull(aggregateParam, "aggregateParam can not be null");
+        this.isDistinct = isDistinct;
+    }
+
+    public AggregateFunction(String name, List<Expression> children) {
+        this(name, false, children);
+    }
+
+    public AggregateFunction(String name, boolean isDistinct, List<Expression> children) {
+        super(name, children);
+        this.isDistinct = isDistinct;
     }
 
     @Override
     public abstract AggregateFunction withChildren(List<Expression> children);
 
-    public abstract DataType getFinalType();
+    protected List<DataType> intermediateTypes() {
+        return ImmutableList.of(VarcharType.SYSTEM_DEFAULT);
+    }
 
-    public abstract DataType getIntermediateType();
+    public abstract AggregateFunction withDistinctAndChildren(boolean isDistinct, List<Expression> children);
 
-    public abstract AggregateFunction withAggregateParam(AggregateParam aggregateParam);
+    /** getIntermediateTypes */
+    public final PartialAggType getIntermediateTypes() {
+        return new PartialAggType(getArguments(), intermediateTypes());
+    }
+
+    @Override
+    public final DataType getDataType() {
+        return getSignature().returnType;
+    }
+
+    @Override
+    public List<AbstractDataType> expectedInputTypes() {
+        return getSignature().argumentsTypes;
+    }
 
     public boolean isDistinct() {
-        return aggregateParam.isDistinct;
-    }
-
-    public boolean isGlobal() {
-        return aggregateParam.isGlobal;
-    }
-
-    public Optional<List<DataType>> inputTypesBeforeDissemble() {
-        return aggregateParam.inputTypesBeforeDissemble;
-    }
-
-    public AggregateParam getAggregateParam() {
-        return aggregateParam;
+        return isDistinct;
     }
 
     @Override
@@ -76,14 +95,14 @@ public abstract class AggregateFunction extends BoundFunction {
             return false;
         }
         AggregateFunction that = (AggregateFunction) o;
-        return Objects.equals(aggregateParam, that.aggregateParam)
+        return Objects.equals(isDistinct, that.isDistinct)
                 && Objects.equals(getName(), that.getName())
                 && Objects.equals(children, that.children);
     }
 
     @Override
     public int hashCode() {
-        return Objects.hash(aggregateParam, getName(), children);
+        return Objects.hash(isDistinct, getName(), children);
     }
 
     @Override
@@ -97,11 +116,20 @@ public abstract class AggregateFunction extends BoundFunction {
     }
 
     @Override
-    public final DataType getDataType() {
-        if (aggregateParam.isGlobal) {
-            return getFinalType();
-        } else {
-            return getIntermediateType();
-        }
+    public String toSql() throws UnboundException {
+        String args = children()
+                .stream()
+                .map(Expression::toSql)
+                .collect(Collectors.joining(", "));
+        return getName() + "(" + (isDistinct ? "DISTINCT " : "") + args + ")";
+    }
+
+    @Override
+    public String toString() {
+        String args = children()
+                .stream()
+                .map(Expression::toString)
+                .collect(Collectors.joining(", "));
+        return getName() + "(" + (isDistinct ? "DISTINCT " : "") + args + ")";
     }
 }

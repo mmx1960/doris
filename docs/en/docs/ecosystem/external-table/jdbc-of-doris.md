@@ -26,6 +26,8 @@ under the License.
 
 # JDBC External Table Of Doris
 
+<version since="1.2.0">
+
 JDBC External Table Of Doris provides Doris to access external tables through the standard interface (JDBC) of database access. External tables save the tedious data import work, allowing Doris to have the ability to access various databases, and with the help of Doris's capabilities to solve data analysis problems with external tables:
 
 1. Support various data sources to access Doris
@@ -33,6 +35,7 @@ JDBC External Table Of Doris provides Doris to access external tables through th
 
 This document mainly introduces how to use this function.
 
+</version>
 
 ## Instructions
 
@@ -80,11 +83,23 @@ Parameter Description：
 | **table**        | The table name mapped to the external database when creating the external table in Doris.|
 | **table_type**   | When creating an appearance in Doris, the table comes from that database. for example mysql,postgresql,sqlserver,oracle.|
 
+>**Notice:**
+>
+>If you use the local path method, the jar package that the database driver depends on, the FE and BE nodes must be placed here
+
+<version since="1.2.1">
+
+> After 1.2.1, you can put the driver in the `jdbc_drivers` directory of FE/BE, and directly specify the file name, such as: `"driver_url" = "mysql-connector-java-5.1.47.jar "`. The system will automatically look for files in the `jdbc_drivers` directory.
+
+</version>
+
 ### Query usage
 
 ```
 select * from mysql_table where k1 > 1000 and k3 ='term';
 ```
+Because it is possible to use keywords in the database as column name, in order to solve this problem, escape characters will be automatically added to field names and table names in SQL statements according to the standards of each database. For example, MYSQL (``), PostgreSQL (""), SQLServer ([]), and ORACLE (""), But this may cause case sensitivity of field names. You can check the query statements issued to each database after escape through explain SQL.
+
 ### Data write
 
 After the JDBC external table is create in Doris, the data can be written directly by the `insert into` statement, the query results of Doris can be written to the JDBC external table, or the data can be imported from one JDBC table to another.
@@ -148,6 +163,10 @@ PROPERTIES (
 
 At present, only this version has been tested, and other versions will be added after testing
 
+#### 4.ClickHouse
+| ClickHouse Version | ClickHouse JDBC Driver Version        |
+|-------------|---------------------------------------|
+| 22          | clickhouse-jdbc-0.3.2-patch11-all.jar |
 
 ## Type matching
 
@@ -158,16 +177,17 @@ There are different data types among different databases. Here is a list of the 
 |  MySQL   |  Doris   |
 | :------: | :------: |
 | BOOLEAN  | BOOLEAN  |
-|   CHAR   |   CHAR   |
-| VARCHAR  | VARCHAR  |
-|   DATE   |   DATE   |
-|  FLOAT   |  FLOAT   |
+| BIT(1)   | BOOLEAN  |
 | TINYINT  | TINYINT  |
 | SMALLINT | SMALLINT |
 |   INT    |   INT    |
 |  BIGINT  |  BIGINT  |
-|  DOUBLE  |  DOUBLE  |
+|BIGINT UNSIGNED|LARGEINT|
+| VARCHAR  | VARCHAR  |
+|   DATE   |   DATE   |
+|  FLOAT   |  FLOAT   |
 | DATETIME | DATETIME |
+|  DOUBLE  |  DOUBLE  |
 | DECIMAL  | DECIMAL  |
 
 
@@ -176,56 +196,110 @@ There are different data types among different databases. Here is a list of the 
 |    PostgreSQL    |  Doris   |
 | :--------------: | :------: |
 |     BOOLEAN      | BOOLEAN  |
-|       CHAR       |   CHAR   |
-|     VARCHAR      | VARCHAR  |
-|       DATE       |   DATE   |
-|       REAL       |  FLOAT   |
 |     SMALLINT     | SMALLINT |
 |       INT        |   INT    |
 |      BIGINT      |  BIGINT  |
-| DOUBLE PRECISION |  DOUBLE  |
+|     VARCHAR      | VARCHAR  |
+|       DATE       |   DATE   |
 |    TIMESTAMP     | DATETIME |
+|       REAL       |  FLOAT   |
+|      FLOAT       |  DOUBLE  |
 |     DECIMAL      | DECIMAL  |
 
 ### Oracle
 
 |  Oracle  |  Doris   |
 | :------: | :------: |
-|   CHAR   |   CHAR   |
 | VARCHAR  | VARCHAR  |
 |   DATE   | DATETIME |
 | SMALLINT | SMALLINT |
 |   INT    |   INT    |
+|   REAL   |   DOUBLE |
+|   FLOAT  |   DOUBLE |
 |  NUMBER  | DECIMAL  |
-
 
 ### SQL server
 
 | SQLServer |  Doris   |
 | :-------: | :------: |
 |    BIT    | BOOLEAN  |
-|   CHAR    |   CHAR   |
-|  VARCHAR  | VARCHAR  |
-|   DATE    |   DATE   |
-|   REAL    |  FLOAT   |
 |  TINYINT  | TINYINT  |
 | SMALLINT  | SMALLINT |
 |    INT    |   INT    |
 |  BIGINT   |  BIGINT  |
+|  VARCHAR  | VARCHAR  |
+|   DATE    |   DATE   |
 | DATETIME  | DATETIME |
+|   REAL    |  FLOAT   |
+|   FLOAT   |  DOUBLE  |
 |  DECIMAL  | DECIMAL  |
 
+### ClickHouse
+
+| ClickHouse |  Doris   |
+|:----------:|:--------:|
+|  BOOLEAN   | BOOLEAN  |
+|    CHAR    |   CHAR   |
+|  VARCHAR   | VARCHAR  |
+|   STRING   |  STRING  |
+|    DATE    |   DATE   |
+|  Float32   |  FLOAT   |
+|  Float64   |  DOUBLE  |
+|    Int8    | TINYINT  |
+|   Int16    | SMALLINT |
+|   Int32    |   INT    |
+|   Int64    |  BIGINT  |
+|   Int128   | LARGEINT |
+|  DATETIME  | DATETIME |
+|  DECIMAL   | DECIMAL  |
+
+**Note:**
+- For some specific types in ClickHouse, For example, UUID,IPv4,IPv6, and Enum8 can be matched with Doris's Varchar/String type. However, in the display of IPv4 and IPv6, an extra `/` is displayed before the data, which needs to be processed by the `split_part` function
+- For the Geo type Point of ClickHouse, the match cannot be made
 
 ## Q&A
 
-1. Besides mysql, Oracle, PostgreSQL, and SQL Server support more databases
+1. Besides mysql, Oracle, PostgreSQL, SQL Server and ClickHouse support more databases
 
-At present, Doris only adapts to MySQL, Oracle, SQL Server, and PostgreSQL.  And planning to adapt other databases. In principle, any database that supports JDBC access can be accessed through the JDBC facade. If you need to access other appearances, you are welcome to modify the code and contribute to Doris.
+   At present, Doris only adapts to MySQL, Oracle, PostgreSQL, SQL Server and ClickHouse.  And planning to adapt other databases. In principle, any database that supports JDBC access can be accessed through the JDBC facade. If you need to access other appearances, you are welcome to modify the code and contribute to Doris.
 
-1. Read the Emoji expression on the surface of MySQL, and there is garbled code
+2. Read the Emoji expression on the surface of MySQL, and there is garbled code
 
-When Doris makes a JDBC appearance connection, because the default utf8 code in MySQL is utf8mb3, it cannot represent Emoji expressions that require 4-byte coding. Here, you need to set the code of the corresponding column to utf8mb4, set the server code to utf8mb4, and do not configure characterencoding in the JDBC URL when creating the MySQL appearance (this attribute does not support utf8mb4. If non utf8mb4 is configured, the expression cannot be written. Therefore, it should be left blank and not configured.)
+   When Doris makes a JDBC appearance connection, because the default utf8 code in MySQL is utf8mb3, it cannot represent Emoji expressions that require 4-byte coding. Here, you need to set the code of the corresponding column to utf8mb4, set the server code to utf8mb4, and do not configure characterencoding in the JDBC URL when creating the MySQL appearance (this attribute does not support utf8mb4. If non utf8mb4 is configured, the expression cannot be written. Therefore, it should be left blank and not configured.)
 
+3. When reading the mysql table about DateTime="0000:00:00 00:00:00", an error is reported: "CAUSED BY: DataReadException: Zero date value prohibited"
+
+   This is because the default handling of this illegal DateTime in JDBC is to throw an exception. You can control this behavior through the parameter zeroDateTimeBehavior
+   Optional parameters: EXCEPTION, CONVERT_TO_NULL and ROUND are respectively abnormal error reports, converted to NULL values and converted to "0001-01-01 00:00:00";
+   You can add: "jdbc_url"="jdbc: mysql://IP:PORT/doris_test?zeroDateTimeBehavior=convertToNull "
+
+4. When reading the mysql table or other  external table loading the class failed
+
+   Such as the following exceptions:
+   failed to load driver class com.mysql.jdbc.driver in either of hikariconfig class loader
+   This is because when resource is created, driver_class is incorrectly entered. Therefore, it needs to be correctly entered. For example, if the preceding example is case sensitive, enter as `"driver_class" = "com.mysql.jdbc.Driver"`
+
+5. When reading mysql communications link failure
+
+   If the following error occurs:
+   ```
+   ERROR 1105 (HY000): errCode = 2, detailMessage = PoolInitializationException: Failed to initialize pool: Communications link failure
+    
+   The last packet successfully received from the server was 7 milliseconds ago.  The last packet sent successfully to the server was 4 milliseconds ago.
+   CAUSED BY: CommunicationsException: Communications link failure
+    
+   The last packet successfully received from the server was 7 milliseconds ago.  The last packet sent successfully to the server was 4 milliseconds ago.
+   CAUSED BY: SSLHandshakeExcepti
+   ```
+   You can view the be.out logs of the be
+   If the following information is included:
+   ```
+   WARN: Establishing SSL connection without server's identity verification is not recommended. 
+   According to MySQL 5.5.45+, 5.6.26+ and 5.7.6+ requirements SSL connection must be established by default if explicit option isn't set. 
+   For compliance with existing applications not using SSL the verifyServerCertificate property is set to 'false'. 
+   You need either to explicitly disable SSL by setting useSSL=false, or set useSSL=true and provide truststore for server certificate verification.
+   ```
+   You can add the JDBC connection string at the end of the jdbc_url where the resource is created `?useSSL=false` ,like `"jdbc_url" = "jdbc:mysql://127.0.0.1:3306/test?useSSL=false"`
 
 ```
 Configuration items can be modified globally
@@ -252,3 +326,4 @@ ALTER TABLE table_name CHARSET=utf8mb4;
 SET NAMES utf8mb4
 
 ```
+

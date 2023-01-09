@@ -83,8 +83,8 @@ public class StrToDate extends ScalarFunction
          * Return type is DATETIME
          */
         DataType returnType;
-        if (child(1) instanceof StringLikeLiteral) {
-            if (DateLiteral.hasTimePart(((StringLikeLiteral) child(1)).getStringValue())) {
+        if (getArgument(1) instanceof StringLikeLiteral) {
+            if (DateLiteral.hasTimePart(((StringLikeLiteral) getArgument(1)).getStringValue())) {
                 returnType = DataType.fromCatalogType(ScalarType.getDefaultDateType(Type.DATETIME));
             } else {
                 returnType = DataType.fromCatalogType(ScalarType.getDefaultDateType(Type.DATE));

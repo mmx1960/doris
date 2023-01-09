@@ -118,45 +118,39 @@ suite("test_hive_parquet", "p0") {
     """
     }
 
+    def q18 = {
+        qt_q18 """
+        select count(l_orderkey) from partition_table where nation != 'cn' and l_quantity > 28;
+    """
+    }
 
-    def set_be_config = { flag ->
-        String[][] backends = sql """ show backends; """
-        assertTrue(backends.size() > 0)
-        for (String[] backend in backends) {
-            StringBuilder setConfigCommand = new StringBuilder();
-            setConfigCommand.append("curl -X POST http://")
-            setConfigCommand.append(backend[2])
-            setConfigCommand.append(":")
-            setConfigCommand.append(backend[5])
-            setConfigCommand.append("/api/update_config?")
-            String command1 = setConfigCommand.toString() + "enable_new_load_scan_node=$flag"
-            logger.info(command1)
-            String command2 = setConfigCommand.toString() + "enable_new_file_scanner=$flag"
-            logger.info(command2)
-            def process1 = command1.execute()
-            int code = process1.waitFor()
-            assertEquals(code, 0)
-            def process2 = command2.execute()
-            code = process1.waitFor()
-            assertEquals(code, 0)
-        }
+    def q19 = {
+        qt_q19 """
+        select l_partkey from partition_table
+        where (nation != 'cn' or city !='beijing') and (l_quantity > 28 or l_extendedprice > 30000)
+        order by l_partkey limit 10;
+    """
+    }
+
+    def q20 = {
+        qt_q20 """
+        select nation, city, count(l_linenumber) from partition_table
+        where city != 'beijing' or l_quantity > 28 group by nation, city order by nation, city;
+    """
     }
 
     String enabled = context.config.otherConfigs.get("enableHiveTest")
     if (enabled != null && enabled.equalsIgnoreCase("true")) {
         try {
             String hms_port = context.config.otherConfigs.get("hms_port")
-            sql """admin set frontend config ("enable_multi_catalog" = "true")"""
-            sql """admin set frontend config ("enable_new_load_scan_node" = "true");"""
-            set_be_config.call('true')
-            sql """drop catalog if exists hive"""
-            sql """
-            create catalog if not exists hive properties (
+            String catalog_name = "hive_test_parquet"
+            sql """drop catalog if exists ${catalog_name}"""
+            sql """create resource if not exists hms_resource_hive_parquet properties (
                 "type"="hms",
                 'hive.metastore.uris' = 'thrift://127.0.0.1:${hms_port}'
-            );
-            """
-            sql """use `hive`.`default`"""
+            );"""
+            sql """create catalog if not exists ${catalog_name} with resource hms_resource_hive_parquet;"""
+            sql """use `${catalog_name}`.`default`"""
 
             q01()
             q02()
@@ -175,9 +169,13 @@ suite("test_hive_parquet", "p0") {
             q15()
             q16()
             q17()
+            q18()
+            q19()
+            q20()
+
+            sql """drop catalog if exists ${catalog_name}"""
+            sql """drop resource if exists hms_resource_hive_parquet"""
         } finally {
-            sql """ADMIN SET FRONTEND CONFIG ("enable_new_load_scan_node" = "false");"""
-            set_be_config.call('false')
         }
     }
 }

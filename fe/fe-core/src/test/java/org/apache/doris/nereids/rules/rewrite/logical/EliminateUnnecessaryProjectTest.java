@@ -27,6 +27,7 @@ import org.apache.doris.nereids.trees.plans.logical.LogicalProject;
 import org.apache.doris.nereids.util.LogicalPlanBuilder;
 import org.apache.doris.nereids.util.MemoTestUtils;
 import org.apache.doris.nereids.util.PlanConstructor;
+import org.apache.doris.utframe.TestWithFeService;
 
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.Lists;
@@ -38,7 +39,21 @@ import java.util.List;
 /**
  * test ELIMINATE_UNNECESSARY_PROJECT rule.
  */
-public class EliminateUnnecessaryProjectTest {
+public class EliminateUnnecessaryProjectTest extends TestWithFeService {
+
+    @Override
+    protected void runBeforeAll() throws Exception {
+        createDatabase("test");
+
+        connectContext.setDatabase("default_cluster:test");
+
+        createTable("CREATE TABLE t1 (col1 int not null, col2 int not null, col3 int not null)\n"
+                + "DISTRIBUTED BY HASH(col3)\n"
+                + "BUCKETS 1\n"
+                + "PROPERTIES(\n"
+                + "    \"replication_num\"=\"1\"\n"
+                + ");");
+    }
 
     @Test
     public void testEliminateNonTopUnnecessaryProject() {
@@ -48,7 +63,7 @@ public class EliminateUnnecessaryProjectTest {
                 .build();
 
         CascadesContext cascadesContext = MemoTestUtils.createCascadesContext(unnecessaryProject);
-        List<Rule> rules = Lists.newArrayList(new EliminateUnnecessaryProject().build());
+        List<Rule> rules = Lists.newArrayList(new EliminateUnnecessaryProject().buildRules());
         cascadesContext.topDownRewrite(rules);
 
         Plan actual = cascadesContext.getMemo().copyOut();
@@ -62,7 +77,7 @@ public class EliminateUnnecessaryProjectTest {
                 .build();
 
         CascadesContext cascadesContext = MemoTestUtils.createCascadesContext(unnecessaryProject);
-        List<Rule> rules = Lists.newArrayList(new EliminateUnnecessaryProject().build());
+        List<Rule> rules = Lists.newArrayList(new EliminateUnnecessaryProject().buildRules());
         cascadesContext.topDownRewrite(rules);
 
         Plan actual = cascadesContext.getMemo().copyOut();
@@ -76,10 +91,26 @@ public class EliminateUnnecessaryProjectTest {
                 .build();
 
         CascadesContext cascadesContext = MemoTestUtils.createCascadesContext(unnecessaryProject);
-        List<Rule> rules = Lists.newArrayList(new EliminateUnnecessaryProject().build());
+        List<Rule> rules = Lists.newArrayList(new EliminateUnnecessaryProject().buildRules());
         cascadesContext.topDownRewrite(rules);
 
         Plan actual = cascadesContext.getMemo().copyOut();
         Assertions.assertTrue(actual instanceof LogicalProject);
     }
+
+    // TODO: uncomment this after the Elimination project rule is correctly implemented
+    // @Test
+    // public void testEliminationForThoseNeitherDoPruneNorDoExprCalc() {
+    //     PlanChecker.from(connectContext).checkPlannerResult("SELECT col1 FROM t1",
+    //             p -> {
+    //                 List<PlanFragment> fragments = p.getFragments();
+    //                 Assertions.assertTrue(fragments.stream()
+    //                         .flatMap(fragment -> {
+    //                             Set<OlapScanNode> scans = Sets.newHashSet();
+    //                             fragment.getPlanRoot().collect(OlapScanNode.class, scans);
+    //                             return scans.stream();
+    //                         })
+    //                         .noneMatch(s -> s.getProjectList() != null));
+    //             });
+    // }
 }

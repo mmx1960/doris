@@ -71,7 +71,7 @@ under the License.
 
 ## 创建作业
 
-创建 Schema Change 的具体语法可以查看帮助 [ALTER TABLE COLUMN](../../sql-manual/sql-reference/Data-Definition-Statements/Alter/ALTER-TABLE-COLUMN.md) 中 Schema Change 部分的说明。
+创建 Schema Change 的具体语法可以查看帮助 [ALTER TABLE COLUMN](../../sql-manual/sql-reference/Data-Definition-Statements/Alter/ALTER-TABLE-COLUMN) 中 Schema Change 部分的说明。
 
 Schema Change 的创建是一个异步过程，作业提交成功后，用户需要通过 `SHOW ALTER TABLE COLUMN` 命令来查看作业进度。
 
@@ -200,7 +200,7 @@ ADD COLUMN k5 INT default "1" to rollup2;
 +-----------+-------+-------------+------+------+---------+-------+
 ```
 
-修改语句如下，我们将 k3 列的程度改成 50
+修改语句如下，我们将 k3 列的长度改成 50
 
 
 ```sql
@@ -291,4 +291,4 @@ SHOW ALTER TABLE COLUMN\G;
 
 ## 更多帮助
 
-关于Schema Change使用的更多详细语法及最佳实践，请参阅 [ALTER TABLE COLUMN](../../sql-manual/sql-reference/Data-Definition-Statements/Alter/ALTER-TABLE-COLUMN.md) 命令手册，你也可以在 MySql 客户端命令行下输入 `HELP ALTER TABLE COLUMN`  获取更多帮助信息。
+关于Schema Change使用的更多详细语法及最佳实践，请参阅 [ALTER TABLE COLUMN](../../sql-manual/sql-reference/Data-Definition-Statements/Alter/ALTER-TABLE-COLUMN) 命令手册，你也可以在 MySql 客户端命令行下输入 `HELP ALTER TABLE COLUMN`  获取更多帮助信息。

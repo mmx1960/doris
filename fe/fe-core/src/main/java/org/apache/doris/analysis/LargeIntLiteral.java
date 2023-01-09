@@ -221,7 +221,9 @@ public class LargeIntLiteral extends LiteralExpr {
         if (targetType.isFloatingPointType()) {
             return new FloatLiteral(new Double(value.doubleValue()), targetType);
         } else if (targetType.isDecimalV2() || targetType.isDecimalV3()) {
-            return new DecimalLiteral(new BigDecimal(value));
+            DecimalLiteral res = new DecimalLiteral(new BigDecimal(value));
+            res.setType(targetType);
+            return res;
         } else if (targetType.isIntegerType()) {
             try {
                 return new IntLiteral(value.longValueExact(), targetType);

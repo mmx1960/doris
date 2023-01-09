@@ -25,11 +25,12 @@
 #include "olap/segment_loader.h"
 #include "olap/storage_engine.h"
 #include "olap/storage_policy_mgr.h"
+#include "pipeline/task_scheduler.h"
+#include "runtime/block_spill_manager.h"
 #include "runtime/broker_mgr.h"
 #include "runtime/bufferpool/buffer_pool.h"
 #include "runtime/cache/result_cache.h"
 #include "runtime/client_cache.h"
-#include "runtime/data_stream_mgr.h"
 #include "runtime/disk_io_mgr.h"
 #include "runtime/exec_env.h"
 #include "runtime/external_scan_context_mgr.h"
@@ -44,6 +45,7 @@
 #include "runtime/routine_load/routine_load_task_executor.h"
 #include "runtime/small_file_mgr.h"
 #include "runtime/stream_load/load_stream_mgr.h"
+#include "runtime/stream_load/new_load_stream_mgr.h"
 #include "runtime/stream_load/stream_load_executor.h"
 #include "runtime/thread_resource_mgr.h"
 #include "runtime/tmp_file_mgr.h"
@@ -88,7 +90,6 @@ Status ExecEnv::_init(const std::vector<StorePath>& store_paths) {
     }
 
     _external_scan_context_mgr = new ExternalScanContextMgr(this);
-    _stream_mgr = new DataStreamMgr();
     _vstream_mgr = new doris::vectorized::VDataStreamMgr();
     _result_mgr = new ResultBufferMgr();
     _result_queue_mgr = new ResultQueueMgr();
@@ -128,6 +129,7 @@ Status ExecEnv::_init(const std::vector<StorePath>& store_paths) {
 
     init_download_cache_required_components();
 
+    RETURN_IF_ERROR(init_pipeline_task_scheduler());
     _scanner_scheduler = new doris::vectorized::ScannerScheduler();
 
     _cgroups_mgr = new CgroupsMgr(this, config::doris_cgroups);
@@ -142,12 +144,14 @@ Status ExecEnv::_init(const std::vector<StorePath>& store_paths) {
     _broker_mgr = new BrokerMgr(this);
     _load_channel_mgr = new LoadChannelMgr();
     _load_stream_mgr = new LoadStreamMgr();
+    _new_load_stream_mgr = new NewLoadStreamMgr();
     _internal_client_cache = new BrpcClientCache<PBackendService_Stub>();
     _function_client_cache = new BrpcClientCache<PFunctionService_Stub>();
     _stream_load_executor = new StreamLoadExecutor(this);
     _routine_load_task_executor = new RoutineLoadTaskExecutor(this);
     _small_file_mgr = new SmallFileMgr(this, config::small_file_dir);
     _storage_policy_mgr = new StoragePolicyMgr();
+    _block_spill_mgr = new BlockSpillManager(_store_paths);
 
     _backend_client_cache->init_metrics("backend");
     _frontend_client_cache->init_metrics("frontend");
@@ -156,7 +160,7 @@ Status ExecEnv::_init(const std::vector<StorePath>& store_paths) {
     _cgroups_mgr->init_cgroups();
     Status status = _load_path_mgr->init();
     if (!status.ok()) {
-        LOG(ERROR) << "load path mgr init failed." << status.get_error_msg();
+        LOG(ERROR) << "load path mgr init failed." << status;
         exit(-1);
     }
     _broker_mgr->init();
@@ -169,6 +173,18 @@ Status ExecEnv::_init(const std::vector<StorePath>& store_paths) {
     _heartbeat_flags = new HeartbeatFlags();
     _register_metrics();
     _is_init = true;
+    return Status::OK();
+}
+
+Status ExecEnv::init_pipeline_task_scheduler() {
+    auto executors_size = config::pipeline_executor_size;
+    if (executors_size <= 0) {
+        executors_size = CpuInfo::num_cores();
+    }
+    auto t_queue = std::make_shared<pipeline::TaskQueue>(executors_size);
+    auto b_scheduler = std::make_shared<pipeline::BlockedTaskScheduler>(t_queue);
+    _pipeline_task_scheduler = new pipeline::TaskScheduler(this, b_scheduler, t_queue);
+    RETURN_IF_ERROR(_pipeline_task_scheduler->start());
     return Status::OK();
 }
 
@@ -274,12 +290,6 @@ Status ExecEnv::_init_mem_env() {
     int64_t chunk_reserved_bytes_limit =
             ParseUtil::parse_mem_spec(config::chunk_reserved_bytes_limit, MemInfo::mem_limit(),
                                       MemInfo::physical_mem(), &is_percent);
-    if (chunk_reserved_bytes_limit <= 0) {
-        ss << "Invalid config chunk_reserved_bytes_limit value, must be a percentage or "
-              "positive bytes value or percentage: "
-           << config::chunk_reserved_bytes_limit;
-        return Status::InternalError(ss.str());
-    }
     chunk_reserved_bytes_limit =
             BitUtil::RoundDown(chunk_reserved_bytes_limit, config::min_chunk_reserved_bytes);
     ChunkAllocator::init_instance(chunk_reserved_bytes_limit);
@@ -354,6 +364,7 @@ void ExecEnv::_destroy() {
     SAFE_DELETE(_load_path_mgr);
     SAFE_DELETE(_master_info);
     SAFE_DELETE(_fragment_mgr);
+    SAFE_DELETE(_pipeline_task_scheduler);
     SAFE_DELETE(_cgroups_mgr);
     SAFE_DELETE(_scan_thread_pool);
     SAFE_DELETE(_remote_scan_thread_pool);
@@ -363,7 +374,6 @@ void ExecEnv::_destroy() {
     SAFE_DELETE(_backend_client_cache);
     SAFE_DELETE(_result_mgr);
     SAFE_DELETE(_result_queue_mgr);
-    SAFE_DELETE(_stream_mgr);
     SAFE_DELETE(_stream_load_executor);
     SAFE_DELETE(_routine_load_task_executor);
     SAFE_DELETE(_external_scan_context_mgr);

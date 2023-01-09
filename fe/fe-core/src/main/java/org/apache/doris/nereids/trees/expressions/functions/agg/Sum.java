@@ -17,17 +17,17 @@
 
 package org.apache.doris.nereids.trees.expressions.functions.agg;
 
+import org.apache.doris.catalog.FunctionSignature;
+import org.apache.doris.nereids.exceptions.AnalysisException;
 import org.apache.doris.nereids.trees.expressions.Expression;
+import org.apache.doris.nereids.trees.expressions.functions.CustomSignature;
 import org.apache.doris.nereids.trees.expressions.shape.UnaryExpression;
-import org.apache.doris.nereids.trees.expressions.typecoercion.ImplicitCastInputTypes;
 import org.apache.doris.nereids.trees.expressions.visitor.ExpressionVisitor;
 import org.apache.doris.nereids.types.BigIntType;
 import org.apache.doris.nereids.types.DataType;
 import org.apache.doris.nereids.types.DecimalV2Type;
 import org.apache.doris.nereids.types.DoubleType;
 import org.apache.doris.nereids.types.LargeIntType;
-import org.apache.doris.nereids.types.coercion.AbstractDataType;
-import org.apache.doris.nereids.types.coercion.FractionalType;
 import org.apache.doris.nereids.types.coercion.IntegralType;
 import org.apache.doris.nereids.types.coercion.NumericType;
 
@@ -37,63 +37,64 @@ import com.google.common.collect.ImmutableList;
 import java.util.List;
 
 /** sum agg function. */
-public class Sum extends AggregateFunction implements UnaryExpression, ImplicitCastInputTypes {
-
-    // used in interface expectedInputTypes to avoid new list in each time it be called
-    private static final List<AbstractDataType> EXPECTED_INPUT_TYPES = ImmutableList.of(NumericType.INSTANCE);
-
+public class Sum extends NullableAggregateFunction implements UnaryExpression, CustomSignature {
     public Sum(Expression child) {
-        super("sum", child);
+        this(false, false, child);
     }
 
-    public Sum(AggregateParam aggregateParam, Expression child) {
-        super("sum", aggregateParam, child);
+    public Sum(boolean isDistinct, Expression arg) {
+        this(isDistinct, false, arg);
+    }
+
+    private Sum(boolean isDistinct, boolean isAlwaysNullable, Expression arg) {
+        super("sum", isAlwaysNullable, isDistinct, arg);
     }
 
     @Override
-    public DataType getFinalType() {
-        DataType dataType = child().getDataType();
+    public FunctionSignature customSignature() {
+        DataType originDataType = getArgument(0).getDataType();
+        DataType implicitCastType = implicitCast(originDataType);
+        return FunctionSignature.ret(implicitCastType).args(originDataType);
+    }
+
+    @Override
+    protected List<DataType> intermediateTypes() {
+        return ImmutableList.of(getDataType());
+    }
+
+    @Override
+    public Sum withDistinctAndChildren(boolean isDistinct, List<Expression> children) {
+        Preconditions.checkArgument(children.size() == 1);
+        return new Sum(isDistinct, isAlwaysNullable, children.get(0));
+    }
+
+    @Override
+    public Sum withChildren(List<Expression> children) {
+        Preconditions.checkArgument(children.size() == 1);
+        return new Sum(isDistinct, isAlwaysNullable, children.get(0));
+    }
+
+    @Override
+    public NullableAggregateFunction withAlwaysNullable(boolean isAlwaysNullable) {
+        return new Sum(isDistinct, isAlwaysNullable, children.get(0));
+    }
+
+    @Override
+    public <R, C> R accept(ExpressionVisitor<R, C> visitor, C context) {
+        return visitor.visitSum(this, context);
+    }
+
+    private DataType implicitCast(DataType dataType) {
         if (dataType instanceof LargeIntType) {
             return dataType;
         } else if (dataType instanceof DecimalV2Type) {
             return DecimalV2Type.SYSTEM_DEFAULT;
         } else if (dataType instanceof IntegralType) {
             return BigIntType.INSTANCE;
-        } else if (dataType instanceof FractionalType) {
+        } else if (dataType instanceof NumericType) {
             return DoubleType.INSTANCE;
         } else {
-            throw new IllegalStateException("Unsupported sum type: " + dataType);
+            throw new AnalysisException("sum requires a numeric parameter: " + dataType);
         }
-    }
-
-    @Override
-    public DataType getIntermediateType() {
-        return getFinalType();
-    }
-
-    @Override
-    public boolean nullable() {
-        return child().nullable();
-    }
-
-    @Override
-    public List<AbstractDataType> expectedInputTypes() {
-        return EXPECTED_INPUT_TYPES;
-    }
-
-    @Override
-    public Sum withChildren(List<Expression> children) {
-        Preconditions.checkArgument(children.size() == 1);
-        return new Sum(getAggregateParam(), children.get(0));
-    }
-
-    @Override
-    public Sum withAggregateParam(AggregateParam aggregateParam) {
-        return new Sum(aggregateParam, child());
-    }
-
-    @Override
-    public <R, C> R accept(ExpressionVisitor<R, C> visitor, C context) {
-        return visitor.visitSum(this, context);
     }
 }

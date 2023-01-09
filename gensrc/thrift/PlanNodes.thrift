@@ -211,6 +211,8 @@ struct TBrokerScanRangeParams {
     12: optional i32 line_delimiter_length = 1;
     13: optional string column_separator_str;
     14: optional string line_delimiter_str;
+    // trim double quotes for csv
+    15: optional bool trim_double_quotes;
 
 }
 
@@ -255,6 +257,32 @@ struct TFileAttributes {
     8: optional bool read_by_column_def;
     // csv with header type
     9: optional string header_type;
+    // trim double quotes for csv
+    10: optional bool trim_double_quotes;
+}
+
+struct TIcebergDeleteFileDesc {
+    1: optional string path;
+    2: optional i64 position_lower_bound;
+    3: optional i64 position_upper_bound;
+    4: optional list<i32> field_ids;
+}
+
+struct TIcebergFileDesc {
+    1: optional i32 format_version;
+    // Iceberg file type, 0: data, 1: position delete, 2: equality delete.
+    2: optional i32 content;
+    // When open a delete file, filter the data file path with the 'file_path' property
+    3: optional list<TIcebergDeleteFileDesc> delete_files;
+    // Deprecated
+    4: optional Types.TTupleId delete_table_tuple_id;
+    // Deprecated
+    5: optional Exprs.TExpr file_select_conjunct;
+}
+
+struct TTableFormatFileDesc {
+    1: optional string table_format_type
+    2: optional TIcebergFileDesc iceberg_params
 }
 
 struct TFileScanRangeParams {
@@ -289,8 +317,10 @@ struct TFileScanRangeParams {
     14: optional list<Types.TNetworkAddress> broker_addresses
     15: optional TFileAttributes file_attributes
     16: optional Exprs.TExpr pre_filter_exprs
+    // Deprecated, For data lake table format
+    17: optional TTableFormatFileDesc table_format_params
     // For csv query task, same the column index in file, order by dest_tuple
-    17: optional list<i32> column_idxs
+    18: optional list<i32> column_idxs
 }
 
 struct TFileRangeDesc {
@@ -308,6 +338,8 @@ struct TFileRangeDesc {
     6: optional list<string> columns_from_path;
     // column names from file path, in the same order with columns_from_path
     7: optional list<string> columns_from_path_keys;
+    // For data lake table format
+    8: optional TTableFormatFileDesc table_format_params
 }
 
 // TFileScanRange represents a set of descriptions of a file and the rules for reading and converting it.
@@ -376,6 +408,7 @@ struct TJdbcScanNode {
   1: optional Types.TTupleId tuple_id
   2: optional string table_name
   3: optional string query_string
+  4: optional Types.TOdbcTableType table_type
 }
 
 
@@ -475,6 +508,7 @@ struct TSchemaScanNode {
   11: optional Types.TUserIdentity current_user_ident   // to replace the user and user_ip
   12: optional bool show_hidden_cloumns = false
   13: optional list<TSchemaTableStructure> table_structure
+  14: optional string catalog
 }
 
 struct TMetaScanNode {
@@ -521,6 +555,7 @@ struct TOlapScanNode {
   10: optional i64 sort_limit
   11: optional bool enable_unique_key_merge_on_write
   12: optional TPushAggOp push_down_agg_type_opt
+  13: optional bool use_topn_opt
 }
 
 struct TEqJoinCondition {
@@ -580,7 +615,9 @@ struct THashJoinNode {
 
   9: optional list<Types.TTupleId> vintermediate_tuple_id_list
 
-  10: optional bool is_broadcast_join;
+  10: optional bool is_broadcast_join
+
+  11: optional bool is_mark
 }
 
 struct TNestedLoopJoinNode {
@@ -591,6 +628,13 @@ struct TNestedLoopJoinNode {
   3: optional Types.TTupleId voutput_tuple_id
 
   4: optional list<Types.TTupleId> vintermediate_tuple_id_list
+
+  // for bitmap filer, don't need to join, but output left child tuple
+  5: optional bool is_output_left_side_only
+
+  6: optional Exprs.TExpr vjoin_conjunct
+
+  7: optional bool is_mark
 }
 
 struct TMergeJoinNode {
@@ -689,6 +733,7 @@ struct TSortNode {
 
   // Indicates whether the imposed limit comes DEFAULT_ORDER_BY_LIMIT.           
   6: optional bool is_default_limit                                              
+  7: optional bool use_topn_opt
 }
 
 enum TAnalyticWindowType {
@@ -887,6 +932,7 @@ enum TRuntimeFilterType {
   BLOOM = 2
   MIN_MAX = 4
   IN_OR_BLOOM = 8
+  BITMAP = 16
 }
 
 // Specification of a runtime filter.
@@ -921,6 +967,12 @@ struct TRuntimeFilterDesc {
   // The size of the filter based on the ndv estimate and the min/max limit specified in
   // the query options. Should be greater than zero for bloom filters, zero otherwise.
   9: optional i64 bloom_filter_size_bytes
+
+  // for bitmap filter target expr
+  10: optional Exprs.TExpr bitmap_target_expr
+
+  // for bitmap filter
+  11: optional bool bitmap_filter_not_in
 }
 
 struct TDataGenScanNode {

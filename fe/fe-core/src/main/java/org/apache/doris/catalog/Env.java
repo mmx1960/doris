@@ -126,6 +126,7 @@ import org.apache.doris.datasource.CatalogMgr;
 import org.apache.doris.datasource.EsExternalCatalog;
 import org.apache.doris.datasource.ExternalMetaCacheMgr;
 import org.apache.doris.datasource.InternalCatalog;
+import org.apache.doris.datasource.hive.event.MetastoreEventsProcessor;
 import org.apache.doris.deploy.DeployManager;
 import org.apache.doris.deploy.impl.AmbariDeployManager;
 import org.apache.doris.deploy.impl.K8sDeployManager;
@@ -169,7 +170,6 @@ import org.apache.doris.metric.MetricRepo;
 import org.apache.doris.mtmv.MTMVJobManager;
 import org.apache.doris.mysql.privilege.PaloAuth;
 import org.apache.doris.mysql.privilege.PrivPredicate;
-import org.apache.doris.persist.AnalysisJobScheduler;
 import org.apache.doris.persist.BackendIdsUpdateInfo;
 import org.apache.doris.persist.BackendReplicasInfo;
 import org.apache.doris.persist.BackendTabletsInfo;
@@ -209,19 +209,11 @@ import org.apache.doris.qe.JournalObservable;
 import org.apache.doris.qe.VariableMgr;
 import org.apache.doris.resource.Tag;
 import org.apache.doris.service.FrontendOptions;
-import org.apache.doris.statistics.AnalysisJobInfo;
-import org.apache.doris.statistics.AnalysisJobInfo.AnalysisType;
-import org.apache.doris.statistics.AnalysisJobInfo.JobState;
-import org.apache.doris.statistics.AnalysisJobInfo.ScheduleType;
-import org.apache.doris.statistics.StatisticConstants;
-import org.apache.doris.statistics.StatisticStorageInitializer;
+import org.apache.doris.statistics.AnalysisManager;
+import org.apache.doris.statistics.AnalysisTaskScheduler;
 import org.apache.doris.statistics.StatisticsCache;
-import org.apache.doris.statistics.StatisticsJobManager;
-import org.apache.doris.statistics.StatisticsJobScheduler;
-import org.apache.doris.statistics.StatisticsManager;
-import org.apache.doris.statistics.StatisticsTaskScheduler;
-import org.apache.doris.statistics.StatisticsUtil;
 import org.apache.doris.system.Backend;
+import org.apache.doris.system.FQDNManager;
 import org.apache.doris.system.Frontend;
 import org.apache.doris.system.HeartbeatMgr;
 import org.apache.doris.system.SystemInfoService;
@@ -252,7 +244,6 @@ import com.sleepycat.je.rep.NetworkRestoreConfig;
 import lombok.Setter;
 import org.apache.commons.collections.CollectionUtils;
 import org.apache.commons.lang3.StringUtils;
-import org.apache.commons.text.StringSubstitutor;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 import org.codehaus.jackson.map.ObjectMapper;
@@ -326,6 +317,7 @@ public class Env {
     private DeleteHandler deleteHandler;
     private DbUsedDataQuotaInfoCollector dbUsedDataQuotaInfoCollector;
     private PartitionInMemoryInfoCollector partitionInMemoryInfoCollector;
+    private MetastoreEventsProcessor metastoreEventsProcessor;
 
     private MasterDaemon labelCleaner; // To clean old LabelInfo, ExportJobInfos
     private MasterDaemon txnCleaner; // To clean aborted or timeout txns
@@ -402,11 +394,6 @@ public class Env {
     private DeployManager deployManager;
 
     private TabletStatMgr tabletStatMgr;
-    // statistics
-    private StatisticsManager statisticsManager;
-    private StatisticsJobManager statisticsJobManager;
-    private StatisticsJobScheduler statisticsJobScheduler;
-    private StatisticsTaskScheduler statisticsTaskScheduler;
 
     private PaloAuth auth;
 
@@ -447,11 +434,11 @@ public class Env {
 
     private MTMVJobManager mtmvJobManager;
 
-    private final AnalysisJobScheduler analysisJobScheduler;
-
-    private final StatisticsCache statisticsCache;
+    private AnalysisManager analysisManager;
 
     private ExternalMetaCacheMgr extMetaCacheMgr;
+
+    private FQDNManager fqdnManager;
 
     public List<Frontend> getFrontends(FrontendNodeType nodeType) {
         if (nodeType == null) {
@@ -564,6 +551,7 @@ public class Env {
         this.deleteHandler = new DeleteHandler();
         this.dbUsedDataQuotaInfoCollector = new DbUsedDataQuotaInfoCollector();
         this.partitionInMemoryInfoCollector = new PartitionInMemoryInfoCollector();
+        this.metastoreEventsProcessor = new MetastoreEventsProcessor();
 
         this.replayedJournalId = new AtomicLong(0L);
         this.isElectable = false;
@@ -600,11 +588,6 @@ public class Env {
         this.globalTransactionMgr = new GlobalTransactionMgr(this);
 
         this.tabletStatMgr = new TabletStatMgr();
-        // statistics
-        this.statisticsManager = new StatisticsManager();
-        this.statisticsJobManager = new StatisticsJobManager();
-        this.statisticsJobScheduler = new StatisticsJobScheduler();
-        this.statisticsTaskScheduler = new StatisticsTaskScheduler();
 
         this.auth = new PaloAuth();
         this.domainResolver = new DomainResolver(auth);
@@ -651,9 +634,9 @@ public class Env {
         this.refreshManager = new RefreshManager();
         this.policyMgr = new PolicyMgr();
         this.mtmvJobManager = new MTMVJobManager();
-        this.analysisJobScheduler = new AnalysisJobScheduler();
-        this.statisticsCache = new StatisticsCache();
         this.extMetaCacheMgr = new ExternalMetaCacheMgr();
+        this.fqdnManager = new FQDNManager(systemInfo);
+        this.analysisManager = new AnalysisManager();
     }
 
     public static void destroyCheckpoint() {
@@ -760,23 +743,6 @@ public class Env {
     // For unit test only
     public Checkpoint getCheckpointer() {
         return checkpointer;
-    }
-
-    // statistics
-    public StatisticsManager getStatisticsManager() {
-        return statisticsManager;
-    }
-
-    public StatisticsJobManager getStatisticsJobManager() {
-        return statisticsJobManager;
-    }
-
-    public StatisticsJobScheduler getStatisticsJobScheduler() {
-        return statisticsJobScheduler;
-    }
-
-    public StatisticsTaskScheduler getStatisticsTaskScheduler() {
-        return statisticsTaskScheduler;
     }
 
     // Use tryLock to avoid potential dead lock
@@ -1435,9 +1401,14 @@ public class Env {
         partitionInMemoryInfoCollector.start();
         streamLoadRecordMgr.start();
         getInternalCatalog().getIcebergTableCreationRecordMgr().start();
-        this.statisticsJobScheduler.start();
-        this.statisticsTaskScheduler.start();
-        new StatisticStorageInitializer().start();
+        new InternalSchemaInitializer().start();
+        if (Config.enable_fqdn_mode) {
+            fqdnManager.start();
+        }
+        if (Config.enable_hms_events_incremental_sync) {
+            metastoreEventsProcessor.start();
+        }
+
     }
 
     // start threads that should running on all FE
@@ -1653,7 +1624,7 @@ public class Env {
     }
 
     public StatisticsCache getStatisticsCache() {
-        return statisticsCache;
+        return analysisManager.getStatisticsCache();
     }
 
     public boolean hasReplayer() {
@@ -2978,12 +2949,6 @@ public class Env {
             sb.append(",\n\"").append(PropertyAnalyzer.PROPERTIES_STORAGE_FORMAT).append("\" = \"");
             sb.append(olapTable.getStorageFormat()).append("\"");
 
-            // remote storage
-            String remoteStoragePolicy = olapTable.getRemoteStoragePolicy();
-            if (!Strings.isNullOrEmpty(remoteStoragePolicy)) {
-                sb.append(",\n\"").append(PropertyAnalyzer.PROPERTIES_REMOTE_STORAGE_POLICY).append("\" = \"");
-                sb.append(remoteStoragePolicy).append("\"");
-            }
             // compression type
             if (olapTable.getCompressionType() != TCompressionType.LZ4F) {
                 sb.append(",\n\"").append(PropertyAnalyzer.PROPERTIES_COMPRESSION).append("\" = \"");
@@ -2991,7 +2956,7 @@ public class Env {
             }
 
             // unique key table with merge on write
-            if (olapTable.getEnableUniqueKeyMergeOnWrite()) {
+            if (olapTable.getKeysType() == KeysType.UNIQUE_KEYS && olapTable.getEnableUniqueKeyMergeOnWrite()) {
                 sb.append(",\n\"").append(PropertyAnalyzer.ENABLE_UNIQUE_KEY_MERGE_ON_WRITE).append("\" = \"");
                 sb.append(olapTable.getEnableUniqueKeyMergeOnWrite()).append("\"");
             }
@@ -3010,9 +2975,15 @@ public class Env {
 
             // sequence type
             if (olapTable.hasSequenceCol()) {
-                sb.append(",\n\"").append(PropertyAnalyzer.PROPERTIES_FUNCTION_COLUMN + "."
-                        + PropertyAnalyzer.PROPERTIES_SEQUENCE_TYPE).append("\" = \"");
-                sb.append(olapTable.getSequenceType().toString()).append("\"");
+                if (olapTable.getSequenceMapCol() != null) {
+                    sb.append(",\n\"").append(PropertyAnalyzer.PROPERTIES_FUNCTION_COLUMN + "."
+                            + PropertyAnalyzer.PROPERTIES_SEQUENCE_COL).append("\" = \"");
+                    sb.append(olapTable.getSequenceMapCol()).append("\"");
+                } else {
+                    sb.append(",\n\"").append(PropertyAnalyzer.PROPERTIES_FUNCTION_COLUMN + "."
+                            + PropertyAnalyzer.PROPERTIES_SEQUENCE_TYPE).append("\" = \"");
+                    sb.append(olapTable.getSequenceType().toString()).append("\"");
+                }
             }
 
             // disable auto compaction
@@ -3148,7 +3119,8 @@ public class Env {
             addTableComment(jdbcTable, sb);
             sb.append("\nPROPERTIES (\n");
             sb.append("\"resource\" = \"").append(jdbcTable.getResourceName()).append("\",\n");
-            sb.append("\"table\" = \"").append(jdbcTable.getJdbcTable()).append("\"");
+            sb.append("\"table\" = \"").append(jdbcTable.getJdbcTable()).append("\",\n");
+            sb.append("\"table_type\" = \"").append(jdbcTable.getJdbcTypeName()).append("\"");
             sb.append("\n)");
         }
 
@@ -4155,6 +4127,11 @@ public class Env {
             }
         }
 
+        // 5. modify sequence map col
+        if (table.hasSequenceCol() && table.getSequenceMapCol().equalsIgnoreCase(colName)) {
+            table.setSequenceMapCol(newColName);
+        }
+
         table.rebuildFullSchema();
 
         if (!isReplay) {
@@ -4441,7 +4418,16 @@ public class Env {
             throw new DdlException(ErrorCode.ERR_UNKNOWN_CATALOG.formatErrorMsg(catalogName),
                     ErrorCode.ERR_UNKNOWN_CATALOG);
         }
+
+        String currentDB = ctx.getDatabase();
+        if (StringUtils.isNotEmpty(currentDB)) {
+            catalogMgr.addLastDBOfCatalog(ctx.getCurrentCatalog().getName(), currentDB);
+        }
         ctx.changeDefaultCatalog(catalogName);
+        String lastDb = catalogMgr.getLastDB(catalogName);
+        if (StringUtils.isNotEmpty(lastDb)) {
+            ctx.setDatabase(lastDb);
+        }
         if (catalogIf instanceof EsExternalCatalog) {
             ctx.setDatabase(SystemInfoService.DEFAULT_CLUSTER + ClusterNamespace.CLUSTER_DELIMITER
                     + EsExternalCatalog.DEFAULT_DB);
@@ -4770,7 +4756,7 @@ public class Env {
     public void createFunction(CreateFunctionStmt stmt) throws UserException {
         FunctionName name = stmt.getFunctionName();
         Database db = getInternalCatalog().getDbOrDdlException(name.getDb());
-        db.addFunction(stmt.getFunction());
+        db.addFunction(stmt.getFunction(), stmt.isIfNotExists());
     }
 
     public void replayCreateFunction(Function function) throws MetaNotFoundException {
@@ -4782,7 +4768,7 @@ public class Env {
     public void dropFunction(DropFunctionStmt stmt) throws UserException {
         FunctionName name = stmt.getFunctionName();
         Database db = getInternalCatalog().getDbOrDdlException(name.getDb());
-        db.dropFunction(stmt.getFunction());
+        db.dropFunction(stmt.getFunction(), stmt.isIfExists());
     }
 
     public void replayDropFunction(FunctionSearchDesc functionSearchDesc) throws MetaNotFoundException {
@@ -5228,8 +5214,8 @@ public class Env {
         return count;
     }
 
-    public AnalysisJobScheduler getAnalysisJobScheduler() {
-        return analysisJobScheduler;
+    public AnalysisTaskScheduler getAnalysisJobScheduler() {
+        return analysisManager.taskScheduler;
     }
 
     // TODO:
@@ -5237,40 +5223,11 @@ public class Env {
     //  2. support sample job
     //  3. support period job
     public void createAnalysisJob(AnalyzeStmt analyzeStmt) {
-        String catalogName = analyzeStmt.getCatalogName();
-        String db = analyzeStmt.getDBName();
-        String tbl = analyzeStmt.getTblName();
-        List<String> colNames = analyzeStmt.getOptColumnNames();
-        String persistAnalysisJobSQLTemplate = "INSERT INTO " + StatisticConstants.STATISTIC_DB_NAME + "."
-                + StatisticConstants.ANALYSIS_JOB_TABLE + " VALUES(${jobId}, '${catalogName}', '${dbName}',"
-                + "'${tblName}','${colName}', '${jobType}', '${analysisType}', '${message}', '${lastExecTimeInMs}',"
-                + "'${state}', '${scheduleType}')";
-        if (colNames != null) {
-            for (String colName : colNames) {
-                AnalysisJobInfo analysisJobInfo = new AnalysisJobInfo(Env.getCurrentEnv().getNextId(), catalogName, db,
-                        tbl, colName, AnalysisJobInfo.JobType.MANUAL, ScheduleType.ONCE);
-                analysisJobInfo.analysisType = AnalysisType.FULL;
-                Map<String, String> params = new HashMap<>();
-                params.put("jobId", String.valueOf(analysisJobInfo.jobId));
-                params.put("catalogName", analysisJobInfo.catalogName);
-                params.put("dbName", analysisJobInfo.dbName);
-                params.put("tblName", analysisJobInfo.tblName);
-                params.put("colName", analysisJobInfo.colName);
-                params.put("jobType", analysisJobInfo.jobType.toString());
-                params.put("analysisType", analysisJobInfo.analysisType.toString());
-                params.put("message", "");
-                params.put("lastExecTimeInMs", "0");
-                params.put("state", JobState.PENDING.toString());
-                params.put("scheduleType", analysisJobInfo.scheduleType.toString());
-                try {
-                    StatisticsUtil.execUpdate(
-                            new StringSubstitutor(params).replace(persistAnalysisJobSQLTemplate));
-                } catch (Exception e) {
-                    LOG.warn("Failed to persite job for column: {}", colName, e);
-                    return;
-                }
-                Env.getCurrentEnv().getAnalysisJobScheduler().schedule(analysisJobInfo);
-            }
-        }
+        analysisManager.createAnalysisJob(analyzeStmt);
     }
+
+    public AnalysisManager getAnalysisManager() {
+        return analysisManager;
+    }
+
 }

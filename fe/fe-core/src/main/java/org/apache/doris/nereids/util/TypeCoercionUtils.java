@@ -19,6 +19,8 @@ package org.apache.doris.nereids.util;
 
 import org.apache.doris.nereids.annotation.Developing;
 import org.apache.doris.nereids.exceptions.AnalysisException;
+import org.apache.doris.nereids.trees.expressions.BinaryArithmetic;
+import org.apache.doris.nereids.trees.expressions.BinaryOperator;
 import org.apache.doris.nereids.trees.expressions.Cast;
 import org.apache.doris.nereids.trees.expressions.Expression;
 import org.apache.doris.nereids.trees.expressions.literal.Literal;
@@ -26,6 +28,8 @@ import org.apache.doris.nereids.types.BigIntType;
 import org.apache.doris.nereids.types.BooleanType;
 import org.apache.doris.nereids.types.DataType;
 import org.apache.doris.nereids.types.DateTimeType;
+import org.apache.doris.nereids.types.DateTimeV2Type;
+import org.apache.doris.nereids.types.DateV2Type;
 import org.apache.doris.nereids.types.DecimalV2Type;
 import org.apache.doris.nereids.types.DoubleType;
 import org.apache.doris.nereids.types.FloatType;
@@ -37,6 +41,7 @@ import org.apache.doris.nereids.types.StringType;
 import org.apache.doris.nereids.types.TinyIntType;
 import org.apache.doris.nereids.types.coercion.AbstractDataType;
 import org.apache.doris.nereids.types.coercion.CharacterType;
+import org.apache.doris.nereids.types.coercion.DateLikeType;
 import org.apache.doris.nereids.types.coercion.FractionalType;
 import org.apache.doris.nereids.types.coercion.IntegralType;
 import org.apache.doris.nereids.types.coercion.NumericType;
@@ -132,7 +137,7 @@ public class TypeCoercionUtils {
 
         if (returnType == null && input instanceof PrimitiveType
                 && expected instanceof CharacterType) {
-            returnType = StringType.INSTANCE;
+            returnType = expected.defaultConcreteType();
         }
 
         // could not do implicit cast, just return null. Throw exception in check analysis.
@@ -151,6 +156,14 @@ public class TypeCoercionUtils {
         }
         if (leftType instanceof DecimalV2Type && rightType instanceof IntegralType
                 || leftType instanceof IntegralType && rightType instanceof DecimalV2Type) {
+            return true;
+        }
+        if (leftType instanceof FloatType && rightType instanceof DecimalV2Type
+                || leftType instanceof DecimalV2Type && rightType instanceof FloatType) {
+            return true;
+        }
+        if (leftType instanceof DoubleType && rightType instanceof DecimalV2Type
+                || leftType instanceof DecimalV2Type && rightType instanceof DoubleType) {
             return true;
         }
         // TODO: add decimal promotion support
@@ -175,7 +188,8 @@ public class TypeCoercionUtils {
      * find the tightest common type for two type
      */
     @Developing
-    public static Optional<DataType> findTightestCommonType(DataType left, DataType right) {
+    public static Optional<DataType> findTightestCommonType(BinaryOperator binaryOperator,
+            DataType left, DataType right) {
         // TODO: compatible with origin planner and BE
         // TODO: when add new type, add it to here
         DataType tightestCommonType = null;
@@ -207,8 +221,30 @@ public class TypeCoercionUtils {
             tightestCommonType = DecimalV2Type.widerDecimalV2Type((DecimalV2Type) left, DecimalV2Type.forType(right));
         } else if (left instanceof IntegralType && right instanceof DecimalV2Type) {
             tightestCommonType = DecimalV2Type.widerDecimalV2Type((DecimalV2Type) right, DecimalV2Type.forType(left));
+        } else if (left instanceof DateLikeType && right instanceof DateLikeType) {
+            if (left instanceof DateTimeV2Type && right instanceof DateTimeV2Type) {
+                if (((DateTimeV2Type) left).getScale() > ((DateTimeV2Type) right).getScale()) {
+                    tightestCommonType = left;
+                } else {
+                    tightestCommonType = right;
+                }
+            } else if (left instanceof DateTimeV2Type) {
+                tightestCommonType = left;
+            } else if (right instanceof DateTimeV2Type) {
+                tightestCommonType = right;
+            } else if (left instanceof DateTimeType || right instanceof DateTimeType) {
+                tightestCommonType = DateTimeType.INSTANCE;
+            } else if (left instanceof DateV2Type || right instanceof DateV2Type) {
+                tightestCommonType = DateV2Type.INSTANCE;
+            }
+        } else if (canCompareDate(left, right)) {
+            if (binaryOperator instanceof BinaryArithmetic) {
+                tightestCommonType = IntegerType.INSTANCE;
+            } else {
+                tightestCommonType = DateTimeType.INSTANCE;
+            }
         }
-        return Optional.ofNullable(tightestCommonType);
+        return tightestCommonType == null ? Optional.of(DoubleType.INSTANCE) : Optional.of(tightestCommonType);
     }
 
     /**
@@ -272,7 +308,7 @@ public class TypeCoercionUtils {
         // TODO: need to rethink how to handle char and varchar to return char or varchar as much as possible.
         return Stream
                 .<Supplier<Optional<DataType>>>of(
-                        () -> findTightestCommonType(left, right),
+                        () -> findTightestCommonType(null, left, right),
                         () -> findWiderTypeForDecimal(left, right),
                         () -> characterPromotion(left, right),
                         () -> findTypeForComplex(left, right))
@@ -350,5 +386,18 @@ public class TypeCoercionUtils {
             }
             return new Cast(input, dataType);
         }
+    }
+
+    private static boolean canCompareDate(DataType left, DataType right) {
+        if (left instanceof DateLikeType) {
+            return right.isDateType() || right.isStringType() || right instanceof TinyIntType
+                    || right instanceof SmallIntType || right instanceof IntegerType
+                    || right instanceof BigIntType;
+        } else if (right instanceof DateLikeType) {
+            return left.isStringType() || left instanceof TinyIntType
+                    || left instanceof SmallIntType || left instanceof IntegerType
+                    || left instanceof BigIntType;
+        }
+        return false;
     }
 }

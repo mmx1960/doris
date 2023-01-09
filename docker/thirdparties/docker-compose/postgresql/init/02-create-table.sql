@@ -114,4 +114,39 @@ CREATE TABLE doris_test.test8 (
   CONSTRAINT "f_a_w_r_p" PRIMARY KEY ("id")
 );
 
+CREATE TABLE doris_test.test9 (
+  id1 smallint,
+  id2 int,
+  id3 bool,
+  id4 varchar(10),
+  id5 bigint
+);
 
+CREATE TABLE catalog_pg_test.test10 (
+   ID INT NOT NULL,
+   bit_value bit,
+   real_value real,
+   cidr_value cidr,
+   inet_value inet,
+   macaddr_value macaddr,
+   bitn_value bit(10),
+   bitnv_value bit varying(10),
+   serial4_value serial4,
+   jsonb_value jsonb
+);
+
+CREATE TABLE catalog_pg_test.test11 (
+   ID INT PRIMARY KEY NOT NULL,
+   point_value point,
+   line_value line,
+   lseg_value lseg,
+   box_value box,
+   path_value path,
+   polygon_value polygon,
+   circle_value circle
+);
+
+CREATE TABLE catalog_pg_test.test12 (
+   ID INT NOT NULL,
+   uuid_value uuid
+);

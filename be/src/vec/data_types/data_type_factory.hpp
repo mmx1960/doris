@@ -35,6 +35,7 @@
 #include "vec/data_types/data_type_date_time.h"
 #include "vec/data_types/data_type_decimal.h"
 #include "vec/data_types/data_type_fixed_length_object.h"
+#include "vec/data_types/data_type_hll.h"
 #include "vec/data_types/data_type_jsonb.h"
 #include "vec/data_types/data_type_nothing.h"
 #include "vec/data_types/data_type_nullable.h"
@@ -76,7 +77,11 @@ public:
                                           BeConsts::MAX_DECIMAL64_PRECISION, 0)},
                     {"Decimal128", std::make_shared<DataTypeDecimal<Decimal128>>(
                                            BeConsts::MAX_DECIMAL128_PRECISION, 0)},
-                    {"Json", std::make_shared<DataTypeJsonb>()},
+                    {"Decimal128I", std::make_shared<DataTypeDecimal<Decimal128I>>(
+                                            BeConsts::MAX_DECIMAL128_PRECISION, 0)},
+                    {"Jsonb", std::make_shared<DataTypeJsonb>()},
+                    {"BitMap", std::make_shared<DataTypeBitMap>()},
+                    {"Hll", std::make_shared<DataTypeHLL>()},
             };
             for (auto const& [key, val] : base_type_map) {
                 instance.register_data_type(key, val);
@@ -117,6 +122,10 @@ public:
 
     DataTypePtr create_data_type(const TTypeDesc& raw_type) {
         return create_data_type(TypeDescriptor::from_thrift(raw_type), raw_type.is_nullable);
+    }
+
+    DataTypePtr create_data_type(const FieldType& type, int precision, int scale) {
+        return _create_primitive_data_type(type, precision, scale);
     }
 
 private:

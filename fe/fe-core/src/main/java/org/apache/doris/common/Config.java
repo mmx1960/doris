@@ -118,13 +118,21 @@ public class Config extends ConfigBase {
 
     /**
      * plugin_dir:
-     *      plugin install directory
+     * plugin install directory
      */
     @ConfField
     public static String plugin_dir = System.getenv("DORIS_HOME") + "/plugins";
 
     @ConfField(mutable = true, masterOnly = true)
     public static boolean plugin_enable = true;
+
+    /**
+     * The default path to save jdbc drivers.
+     * You can put all jdbc drivers in this path, and when creating jdbc resource with only jdbc driver file name,
+     * Doris will find jars from this path.
+     */
+    @ConfField
+    public static String jdbc_drivers_dir = System.getenv("DORIS_HOME") + "/jdbc_drivers";
 
     /**
      * The default parallelism of the load execution plan
@@ -420,11 +428,6 @@ public class Config extends ConfigBase {
     @ConfField public static int max_mysql_service_task_threads_num = 4096;
 
     /**
-     * Cluster name will be shown as the title of web page
-     */
-    @ConfField public static String cluster_name = "Baidu Palo";
-
-    /**
      * node(FE or BE) will be considered belonging to the same Palo cluster if they have same cluster id.
      * Cluster id is usually a random integer generated when master FE start at first time.
      * You can also specify one.
@@ -531,10 +534,6 @@ public class Config extends ConfigBase {
      * Do not change this if you know what you are doing.
      */
     @ConfField public static int load_etl_thread_num_normal_priority = 10;
-    /**
-     * Concurrency of delete jobs.
-     */
-    @ConfField public static int delete_thread_num = 10;
     /**
      * Not available.
      */
@@ -1315,6 +1314,15 @@ public class Config extends ConfigBase {
     public static boolean drop_backend_after_decommission = true;
 
     /**
+     * When tablet size of decommissioned backend is lower than this threshold,
+     * SystemHandler will start to check if all tablets of this backend are in recycled status,
+     * this backend will be dropped immediately if the check result is true.
+     * For performance based considerations, better not set a very high value for this.
+     */
+    @ConfField(mutable = true, masterOnly = true)
+    public static int decommission_tablet_check_threshold = 5000;
+
+    /**
      * Define thrift server's server model, default is TThreadPoolServer model
      */
     @ConfField
@@ -1452,7 +1460,7 @@ public class Config extends ConfigBase {
      * When the result set is large, you may need to increase this value.
      */
     @ConfField
-    public static int grpc_max_message_size_bytes = 1 * 1024 * 1024 * 1024; // 1GB
+    public static int grpc_max_message_size_bytes = 2147483647; // 2GB
 
     /**
      * Used to set minimal number of replication per tablet.
@@ -1674,28 +1682,17 @@ public class Config extends ConfigBase {
     @ConfField
     public static boolean enable_vectorized_load = true;
 
+    @ConfField
+    public static boolean enable_pipeline_load = false;
+
     @ConfField(mutable = false, masterOnly = true)
     public static int backend_rpc_timeout_ms = 60000; // 1 min
-
-    /**
-     * Temp config for multi catalog feature.
-     * Should be removed when this feature is ready.
-     */
-    @ConfField(mutable = true, masterOnly = true)
-    public static boolean enable_multi_catalog = false;
 
     @ConfField(mutable = true, masterOnly = false)
     public static long file_scan_node_split_size = 256 * 1024 * 1024; // 256mb
 
     @ConfField(mutable = true, masterOnly = false)
     public static long file_scan_node_split_num = 128;
-
-    /*
-     * If set to TRUE, the precision of decimal will be broaden to [1, 38].
-     * Decimalv3 of storage layer needs to be enabled first.
-     */
-    @ConfField
-    public static boolean enable_decimalv3 = false;
 
     /**
      * If set to TRUE, FE will:
@@ -1753,7 +1750,7 @@ public class Config extends ConfigBase {
      * Temp config, should be removed when new file scan node is ready.
      */
     @ConfField(mutable = true)
-    public static boolean enable_new_load_scan_node = false;
+    public static boolean enable_new_load_scan_node = true;
 
     /**
      * Max data version of backends serialize block.
@@ -1847,47 +1844,18 @@ public class Config extends ConfigBase {
     @ConfField(mutable = true, masterOnly = false)
     public static long hive_metastore_client_timeout_second = 10;
 
-    @ConfField(mutable = false)
-    public static int statistic_table_bucket_count = 7;
-
-    @ConfField
-    public static long statistics_max_mem_per_query_in_bytes = 2L * 1024 * 1024 * 1024;
-
-    @ConfField
-    public static int statistic_parallel_exec_instance_num = 1;
-
+    /**
+     * Used to determined how many statistics collection SQL could run simultaneously.
+     */
     @ConfField
     public static int statistics_simultaneously_running_job_num = 10;
 
+    /**
+     * Internal table replica num, once set, user should promise the avaible BE is greater than this value,
+     * otherwise the statistics related internal table creation would be failed.
+     */
     @ConfField
     public static int statistic_internal_table_replica_num = 1;
-
-    @ConfField
-    public static int statistic_clean_interval_in_hours = 24 * 2;
-
-    @ConfField
-    public static int statistics_stale_statistics_fetch_size = 1000;
-
-    @ConfField
-    public static int statistics_outdated_record_detector_running_interval_in_minutes = 5;
-
-    @ConfField
-    public static int statistics_records_outdated_time_in_ms = 2 * 24 * 3600 * 1000;
-
-    @ConfField
-    public static int statistics_job_execution_timeout_in_min = 5;
-
-    @ConfField
-    public static int statistics_table_creation_retry_interval_in_seconds = 5;
-
-    @ConfField
-    public static int statistics_cache_max_size = 100000;
-
-    @ConfField
-    public static int statistics_cache_valid_duration_in_hours = 24 * 2;
-
-    @ConfField
-    public static int statistics_cache_refresh_interval = 24 * 2;
 
     /**
      * if table has too many replicas, Fe occur oom when schema change.
@@ -1923,5 +1891,67 @@ public class Config extends ConfigBase {
      */
     @ConfField(mutable = false, masterOnly = false)
     public static long external_cache_expire_time_minutes_after_access = 24 * 60; // 1 day
+
+    /**
+     * Set session variables randomly to check more issues in github workflow
+     */
+    @ConfField(mutable = true, masterOnly = false)
+    public static boolean use_fuzzy_session_variable = false;
+
+    /**
+     * Collect external table statistic info by running sql when set to true.
+     * Otherwise, use external catalog metadata.
+     */
+    @ConfField(mutable = true)
+    public static boolean collect_external_table_stats_by_sql = false;
+
+    /**
+     * Max num of same name meta informatntion in catalog recycle bin.
+     * Default is 3.
+     * 0 means do not keep any meta obj with same name.
+     * < 0 means no limit
+     */
+    @ConfField(mutable = true, masterOnly = true)
+    public static int max_same_name_catalog_trash_num = 3;
+
+    /**
+     * The storage policy is still under developement.
+     * Disable it by default.
+     */
+    @ConfField(mutable = true, masterOnly = true)
+    public static boolean enable_storage_policy = false;
+
+    /**
+     * This config is mainly used in the k8s cluster environment.
+     * When enable_fqdn_mode is true, the name of the pod where be is located will remain unchanged
+     * after reconstruction, while the ip can be changed.
+     */
+    @ConfField(mutable = false, masterOnly = true)
+    public static boolean enable_fqdn_mode = false;
+
+    /**
+     * This is used whether to push down function to MYSQL in external Table with query sql
+     * like odbc, jdbc for mysql table
+     */
+    @ConfField(mutable = true)
+    public static boolean enable_func_pushdown = true;
+
+    /**
+     * If set to true, doris will automatically synchronize hms metadata to the cache in fe.
+     */
+    @ConfField(masterOnly = true)
+    public static boolean enable_hms_events_incremental_sync = false;
+
+    /**
+     * Maximum number of events to poll in each RPC.
+     */
+    @ConfField(mutable = true, masterOnly = true)
+    public static int hms_events_batch_size_per_rpc = 500;
+
+    /**
+     * HMS polling interval in milliseconds.
+     */
+    @ConfField(masterOnly = true)
+    public static int hms_events_polling_interval_ms = 20000;
 }
 

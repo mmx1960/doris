@@ -27,8 +27,10 @@ import org.apache.doris.common.DdlException;
 import org.apache.doris.common.ErrorCode;
 import org.apache.doris.common.ErrorReport;
 import org.apache.doris.common.PatternMatcher;
+import org.apache.doris.nereids.trees.expressions.VariableDesc;
 import org.apache.doris.persist.GlobalVarPersistInfo;
 
+import com.google.common.base.Preconditions;
 import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.ImmutableSortedMap;
 import com.google.common.collect.Lists;
@@ -139,6 +141,14 @@ public class VariableMgr {
         VarAttr attr = field.getAnnotation(VarAttr.class);
         if (VariableVarConverters.hasConverter(attr.name())) {
             value = VariableVarConverters.encode(attr.name(), value).toString();
+        }
+        if (!attr.checker().equals("")) {
+            Preconditions.checkArgument(obj instanceof SessionVariable);
+            try {
+                SessionVariable.class.getDeclaredMethod(attr.checker(), String.class).invoke(obj, value);
+            } catch (Exception e) {
+                ErrorReport.reportDdlException(ErrorCode.ERR_INVALID_VALUE, attr.name(), value, e.getMessage());
+            }
         }
         try {
             switch (field.getType().getSimpleName()) {
@@ -407,15 +417,13 @@ public class VariableMgr {
         }
     }
 
-    // Get variable value through variable name, used to satisfy statement like `SELECT @@comment_version`
-    // For test only
-    public static String getValue(SessionVariable var, SysVariableDesc desc) throws AnalysisException {
-        VarContext ctx = ctxByVarName.get(desc.getName());
+    private static String  getValue(SessionVariable var, String name, SetType setType) throws AnalysisException {
+        VarContext ctx = ctxByVarName.get(name);
         if (ctx == null) {
-            ErrorReport.reportAnalysisException(ErrorCode.ERR_UNKNOWN_SYSTEM_VARIABLE, desc.getName());
+            ErrorReport.reportAnalysisException(ErrorCode.ERR_UNKNOWN_SYSTEM_VARIABLE, name);
         }
 
-        if (desc.getSetType() == SetType.GLOBAL) {
+        if (setType == SetType.GLOBAL) {
             rlock.lock();
             try {
                 return getValue(ctx.getObj(), ctx.getField());
@@ -424,6 +432,21 @@ public class VariableMgr {
             }
         } else {
             return getValue(var, ctx.getField());
+        }
+    }
+
+    // Get variable value through variable name, used to satisfy statement like `SELECT @@comment_version`
+    // For test only
+    public static String getValue(SessionVariable var, SysVariableDesc desc) throws AnalysisException {
+        return getValue(var, desc.getName(), desc.getSetType());
+    }
+
+    // For Nereids optimizer
+    public static String getValue(SessionVariable var, VariableDesc desc) throws RuntimeException {
+        try {
+            return getValue(var, desc.getName(), desc.getSetType());
+        } catch (AnalysisException e) {
+            throw new RuntimeException(e);
         }
     }
 
@@ -515,6 +538,11 @@ public class VariableMgr {
         String minValue() default "0";
 
         String maxValue() default "0";
+
+        // the function name that check the VarAttr before setting it to sessionVariable
+        // only support check function: 0 argument and 0 return value, if an error occurs, throw an exception.
+        // the checker function should be: public void checker(String value), value is the input string.
+        String checker() default "";
 
         // Set to true if the variables need to be forwarded along with forward statement.
         boolean needForward() default false;

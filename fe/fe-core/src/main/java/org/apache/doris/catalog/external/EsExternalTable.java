@@ -49,7 +49,7 @@ public class EsExternalTable extends ExternalTable {
         super(id, name, catalog, dbName, TableType.ES_EXTERNAL_TABLE);
     }
 
-    public synchronized void makeSureInitialized() {
+    protected synchronized void makeSureInitialized() {
         if (!objectCreated) {
             esTable = toEsTable();
             objectCreated = true;
@@ -64,13 +64,6 @@ public class EsExternalTable extends ExternalTable {
     @Override
     public String getMysqlType() {
         return type.name();
-    }
-
-    /**
-     * get database name of es table.
-     */
-    public String getDbName() {
-        return dbName;
     }
 
     @Override
@@ -91,10 +84,10 @@ public class EsExternalTable extends ExternalTable {
         esTable.setClient(esCatalog.getEsRestClient());
         esTable.setUserName(esCatalog.getUsername());
         esTable.setPasswd(esCatalog.getPassword());
-        esTable.setEnableDocValueScan(esCatalog.isEnableDocValueScan());
-        esTable.setEnableKeywordSniff(esCatalog.isEnableKeywordSniff());
-        esTable.setNodesDiscovery(esCatalog.isEnableNodesDiscovery());
-        esTable.setHttpSslEnabled(esCatalog.isEnableSsl());
+        esTable.setEnableDocValueScan(esCatalog.enableDocValueScan());
+        esTable.setEnableKeywordSniff(esCatalog.enableKeywordSniff());
+        esTable.setNodesDiscovery(esCatalog.enableNodesDiscovery());
+        esTable.setHttpSslEnabled(esCatalog.enableSsl());
         esTable.setSeeds(esCatalog.getNodes());
         esTable.setHosts(String.join(",", esCatalog.getNodes()));
         esTable.syncTableMetaData();

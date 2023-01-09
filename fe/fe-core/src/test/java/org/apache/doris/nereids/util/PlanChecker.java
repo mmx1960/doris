@@ -17,13 +17,17 @@
 
 package org.apache.doris.nereids.util;
 
+import org.apache.doris.analysis.ExplainOptions;
 import org.apache.doris.nereids.CascadesContext;
 import org.apache.doris.nereids.NereidsPlanner;
 import org.apache.doris.nereids.StatementContext;
+import org.apache.doris.nereids.exceptions.AnalysisException;
 import org.apache.doris.nereids.glue.LogicalPlanAdapter;
 import org.apache.doris.nereids.jobs.JobContext;
 import org.apache.doris.nereids.jobs.batch.NereidsRewriteJobExecutor;
+import org.apache.doris.nereids.jobs.batch.OptimizeRulesJob;
 import org.apache.doris.nereids.jobs.cascades.DeriveStatsJob;
+import org.apache.doris.nereids.jobs.joinorder.JoinOrderJob;
 import org.apache.doris.nereids.memo.Group;
 import org.apache.doris.nereids.memo.GroupExpression;
 import org.apache.doris.nereids.memo.Memo;
@@ -32,13 +36,17 @@ import org.apache.doris.nereids.pattern.GroupExpressionMatching;
 import org.apache.doris.nereids.pattern.MatchingContext;
 import org.apache.doris.nereids.pattern.PatternDescriptor;
 import org.apache.doris.nereids.pattern.PatternMatcher;
+import org.apache.doris.nereids.properties.PhysicalProperties;
 import org.apache.doris.nereids.rules.Rule;
 import org.apache.doris.nereids.rules.RuleFactory;
 import org.apache.doris.nereids.rules.RuleSet;
 import org.apache.doris.nereids.rules.RuleType;
 import org.apache.doris.nereids.rules.rewrite.OneRewriteRuleFactory;
+import org.apache.doris.nereids.trees.expressions.Slot;
 import org.apache.doris.nereids.trees.plans.Plan;
+import org.apache.doris.nereids.trees.plans.commands.ExplainCommand.ExplainLevel;
 import org.apache.doris.nereids.trees.plans.logical.LogicalPlan;
+import org.apache.doris.nereids.trees.plans.logical.LogicalProject;
 import org.apache.doris.nereids.trees.plans.physical.PhysicalPlan;
 import org.apache.doris.qe.ConnectContext;
 import org.apache.doris.qe.OriginStatement;
@@ -69,6 +77,19 @@ public class PlanChecker {
     public PlanChecker(CascadesContext cascadesContext) {
         this.connectContext = cascadesContext.getConnectContext();
         this.cascadesContext = cascadesContext;
+    }
+
+    public static PlanChecker from(ConnectContext connectContext) {
+        return new PlanChecker(connectContext);
+    }
+
+    public static PlanChecker from(ConnectContext connectContext, Plan initPlan) {
+        CascadesContext cascadesContext = MemoTestUtils.createCascadesContext(connectContext, initPlan);
+        return new PlanChecker(cascadesContext);
+    }
+
+    public static PlanChecker from(CascadesContext cascadesContext) {
+        return new PlanChecker(cascadesContext);
     }
 
     public PlanChecker checkParse(String sql, Consumer<PlanParseChecker> consumer) {
@@ -148,6 +169,11 @@ public class PlanChecker {
 
     public PlanChecker rewrite() {
         new NereidsRewriteJobExecutor(cascadesContext).execute();
+        return this;
+    }
+
+    public PlanChecker optimize() {
+        new OptimizeRulesJob(cascadesContext).execute();
         return this;
     }
 
@@ -246,10 +272,71 @@ public class PlanChecker {
         }
     }
 
+    public PlanChecker applyImplementation(Rule rule) {
+        return applyImplementation(cascadesContext.getMemo().getRoot(), rule);
+    }
+
+    private PlanChecker applyImplementation(Group group, Rule rule) {
+        // copy groupExpressions can prevent ConcurrentModificationException
+        for (GroupExpression logicalExpression : Lists.newArrayList(group.getLogicalExpressions())) {
+            applyImplementation(logicalExpression, rule);
+        }
+
+        for (GroupExpression physicalExpression : Lists.newArrayList(group.getPhysicalExpressions())) {
+            applyImplementation(physicalExpression, rule);
+        }
+        return this;
+    }
+
+    private PlanChecker applyImplementation(GroupExpression groupExpression, Rule rule) {
+        GroupExpressionMatching matchResult = new GroupExpressionMatching(rule.getPattern(), groupExpression);
+
+        for (Plan before : matchResult) {
+            List<Plan> afters = rule.transform(before, cascadesContext);
+            for (Plan after : afters) {
+                if (before != after) {
+                    cascadesContext.getMemo().copyIn(after, before.getGroupExpression().get().getOwnerGroup(), false);
+                }
+            }
+        }
+
+        for (Group childGroup : groupExpression.children()) {
+            for (GroupExpression logicalExpression : childGroup.getLogicalExpressions()) {
+                applyImplementation(logicalExpression, rule);
+            }
+
+            for (GroupExpression physicalExpression : childGroup.getPhysicalExpressions()) {
+                applyImplementation(physicalExpression, rule);
+            }
+        }
+        return this;
+    }
+
     public PlanChecker deriveStats() {
         cascadesContext.pushJob(
-            new DeriveStatsJob(cascadesContext.getMemo().getRoot().getLogicalExpression(), cascadesContext.getCurrentJobContext()));
+                new DeriveStatsJob(cascadesContext.getMemo().getRoot().getLogicalExpression(),
+                        cascadesContext.getCurrentJobContext()));
         cascadesContext.getJobScheduler().executeJobPool(cascadesContext);
+        return this;
+    }
+
+    public PlanChecker orderJoin() {
+        Group root = cascadesContext.getMemo().getRoot();
+        boolean changeRoot = false;
+        if (root.isJoinGroup()) {
+            List<Slot> outputs = root.getLogicalExpression().getPlan().getOutput();
+            GroupExpression newExpr = new GroupExpression(
+                    new LogicalProject(outputs, root.getLogicalExpression().getPlan()),
+                    Lists.newArrayList(root));
+            root = new Group();
+            root.addGroupExpression(newExpr);
+            changeRoot = true;
+        }
+        cascadesContext.pushJob(new JoinOrderJob(root, cascadesContext.getCurrentJobContext()));
+        cascadesContext.getJobScheduler().executeJobPool(cascadesContext);
+        if (changeRoot) {
+            cascadesContext.getMemo().setRoot(root.getLogicalExpression().child(0));
+        }
         return this;
     }
 
@@ -262,7 +349,7 @@ public class PlanChecker {
 
     public PlanChecker matches(PatternDescriptor<? extends Plan> patternDesc) {
         Memo memo = cascadesContext.getMemo();
-        assertMatches(memo, () -> GroupMatchingUtils.topDownFindMatching(memo.getRoot(), patternDesc.pattern));
+        assertMatches(memo, () -> MatchingUtils.topDownFindMatching(memo.getRoot(), patternDesc.pattern));
         return this;
     }
 
@@ -280,7 +367,7 @@ public class PlanChecker {
     private PlanChecker assertMatches(Memo memo, Supplier<Boolean> asserter) {
         Assertions.assertTrue(asserter.get(),
                 () -> "pattern not match, plan :\n"
-                        + memo.getRoot().getLogicalExpression().getPlan().treeString()
+                        + memo.copyOut().treeString()
                         + "\n"
         );
         return this;
@@ -331,6 +418,17 @@ public class PlanChecker {
         return this;
     }
 
+    public PlanChecker checkExplain(String sql, Consumer<NereidsPlanner> consumer) {
+        LogicalPlan parsed = new NereidsParser().parseSingle(sql);
+        NereidsPlanner nereidsPlanner = new NereidsPlanner(
+                new StatementContext(connectContext, new OriginStatement(sql, 0)));
+        LogicalPlanAdapter adapter = LogicalPlanAdapter.of(parsed);
+        adapter.setIsExplain(new ExplainOptions(ExplainLevel.ALL_PLAN));
+        nereidsPlanner.plan(adapter);
+        consumer.accept(nereidsPlanner);
+        return this;
+    }
+
     public PlanChecker checkPlannerResult(String sql, Consumer<NereidsPlanner> consumer) {
         LogicalPlan parsed = new NereidsParser().parseSingle(sql);
         NereidsPlanner nereidsPlanner = new NereidsPlanner(
@@ -348,25 +446,44 @@ public class PlanChecker {
         });
     }
 
-    public static PlanChecker from(ConnectContext connectContext) {
-        return new PlanChecker(connectContext);
-    }
-
-    public static PlanChecker from(ConnectContext connectContext, Plan initPlan) {
-        CascadesContext cascadesContext = MemoTestUtils.createCascadesContext(connectContext, initPlan);
-        return new PlanChecker(cascadesContext);
-    }
-
-    public static PlanChecker from(CascadesContext cascadesContext) {
-        return new PlanChecker(cascadesContext);
-    }
-
     public CascadesContext getCascadesContext() {
         return cascadesContext;
     }
 
     public Plan getPlan() {
         return cascadesContext.getMemo().copyOut();
+    }
+
+    private PhysicalPlan chooseBestPlan(Group rootGroup, PhysicalProperties physicalProperties) {
+        GroupExpression groupExpression = rootGroup.getLowestCostPlan(physicalProperties).orElseThrow(
+                () -> new AnalysisException("lowestCostPlans with physicalProperties("
+                        + physicalProperties + ") doesn't exist in root group")).second;
+        List<PhysicalProperties> inputPropertiesList = groupExpression.getInputPropertiesList(physicalProperties);
+
+        List<Plan> planChildren = Lists.newArrayList();
+        for (int i = 0; i < groupExpression.arity(); i++) {
+            planChildren.add(chooseBestPlan(groupExpression.child(i), inputPropertiesList.get(i)));
+        }
+
+        Plan plan = groupExpression.getPlan().withChildren(planChildren);
+        if (!(plan instanceof PhysicalPlan)) {
+            throw new AnalysisException("Result plan must be PhysicalPlan");
+        }
+
+        PhysicalPlan physicalPlan = ((PhysicalPlan) plan).withPhysicalPropertiesAndStats(
+                groupExpression.getOutputProperties(physicalProperties),
+                groupExpression.getOwnerGroup().getStatistics());
+        return physicalPlan;
+    }
+
+    public PhysicalPlan getBestPlanTree() {
+        return chooseBestPlan(cascadesContext.getMemo().getRoot(), PhysicalProperties.ANY);
+    }
+
+    public PlanChecker printlnBestPlanTree() {
+        System.out.println(chooseBestPlan(cascadesContext.getMemo().getRoot(), PhysicalProperties.ANY).treeString());
+        System.out.println("-----------------------------");
+        return this;
     }
 
     public PlanChecker printlnTree() {

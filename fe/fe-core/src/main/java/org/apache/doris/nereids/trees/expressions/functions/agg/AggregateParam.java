@@ -17,62 +17,38 @@
 
 package org.apache.doris.nereids.trees.expressions.functions.agg;
 
-import org.apache.doris.nereids.types.DataType;
+import org.apache.doris.nereids.trees.plans.AggMode;
+import org.apache.doris.nereids.trees.plans.AggPhase;
 
-import java.util.List;
 import java.util.Objects;
-import java.util.Optional;
 
 /** AggregateParam. */
 public class AggregateParam {
-    public final boolean isGlobal;
 
-    public final boolean isDistinct;
+    public final AggPhase aggPhase;
 
-    // When AggregateDisassemble rule disassemble the aggregate function, say double avg(int), the local
-    // aggregate keep the origin signature, but the global aggregate change to double avg(double).
-    // This behavior is difference from the legacy optimizer, because legacy optimizer keep the same signature
-    // between local aggregate and global aggregate. If the signatures are different, the result would wrong.
-    // So we use this field to record the originInputTypes, and find the catalog function by the origin input types.
-    public final Optional<List<DataType>> inputTypesBeforeDissemble;
+    public final AggMode aggMode;
 
-    public AggregateParam() {
-        this(false, true, Optional.empty());
+    /** AggregateParam */
+    public AggregateParam(AggPhase aggPhase, AggMode aggMode) {
+        this.aggMode = Objects.requireNonNull(aggMode, "aggMode cannot be null");
+        this.aggPhase = Objects.requireNonNull(aggPhase, "aggPhase cannot be null");
     }
 
-    public AggregateParam(boolean distinct) {
-        this(distinct, true, Optional.empty());
+    public static AggregateParam localResult() {
+        return new AggregateParam(AggPhase.LOCAL, AggMode.INPUT_TO_RESULT);
     }
 
-    public AggregateParam(boolean isDistinct, boolean isGlobal) {
-        this(isDistinct, isGlobal, Optional.empty());
+    public AggregateParam withAggPhase(AggPhase aggPhase) {
+        return new AggregateParam(aggPhase, aggMode);
     }
 
-    public AggregateParam(boolean isDistinct, boolean isGlobal, Optional<List<DataType>> inputTypesBeforeDissemble) {
-        this.isDistinct = isDistinct;
-        this.isGlobal = isGlobal;
-        this.inputTypesBeforeDissemble = Objects.requireNonNull(inputTypesBeforeDissemble,
-                "inputTypesBeforeDissemble can not be null");
+    public AggregateParam withAggPhase(AggMode aggMode) {
+        return new AggregateParam(aggPhase, aggMode);
     }
 
-    public static AggregateParam distinctAndGlobal() {
-        return new AggregateParam(true, true, Optional.empty());
-    }
-
-    public static AggregateParam global() {
-        return new AggregateParam(false, true, Optional.empty());
-    }
-
-    public AggregateParam withDistinct(boolean isDistinct) {
-        return new AggregateParam(isDistinct, isGlobal, inputTypesBeforeDissemble);
-    }
-
-    public AggregateParam withGlobal(boolean isGlobal) {
-        return new AggregateParam(isDistinct, isGlobal, inputTypesBeforeDissemble);
-    }
-
-    public AggregateParam withInputTypesBeforeDissemble(Optional<List<DataType>> inputTypesBeforeDissemble) {
-        return new AggregateParam(isDistinct, isGlobal, inputTypesBeforeDissemble);
+    public AggregateParam withAppPhaseAndAppMode(AggPhase aggPhase, AggMode aggMode) {
+        return new AggregateParam(aggPhase, aggMode);
     }
 
     @Override
@@ -84,13 +60,20 @@ public class AggregateParam {
             return false;
         }
         AggregateParam that = (AggregateParam) o;
-        return isDistinct == that.isDistinct
-                && Objects.equals(isGlobal, that.isGlobal)
-                && Objects.equals(inputTypesBeforeDissemble, that.inputTypesBeforeDissemble);
+        return Objects.equals(aggPhase, that.aggPhase)
+                && Objects.equals(aggMode, that.aggMode);
     }
 
     @Override
     public int hashCode() {
-        return Objects.hash(isDistinct, isGlobal, inputTypesBeforeDissemble);
+        return Objects.hash(aggPhase, aggMode);
+    }
+
+    @Override
+    public String toString() {
+        return "AggregateParam{"
+                + "aggPhase=" + aggPhase
+                + ", aggMode=" + aggMode
+                + '}';
     }
 }

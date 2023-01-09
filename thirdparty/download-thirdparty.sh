@@ -221,6 +221,15 @@ echo "===== Patching thirdparty archives..."
 ###################################################################################
 PATCHED_MARK="patched_mark"
 
+# abseil patch
+cd "${TP_SOURCE_DIR}/${ABSEIL_SOURCE}"
+if [[ ! -f "${PATCHED_MARK}" ]]; then
+    patch -p1 <"${TP_PATCH_DIR}/absl.patch"
+    touch "${PATCHED_MARK}"
+fi
+cd -
+echo "Finished patching ${ABSEIL_SOURCE}"
+
 # glog patch
 cd "${TP_SOURCE_DIR}/${GLOG_SOURCE}"
 if [[ ! -f "${PATCHED_MARK}" ]]; then
@@ -257,15 +266,6 @@ fi
 cd -
 echo "Finished patching ${LIBEVENT_SOURCE}"
 
-# s2 patch to disable shared library
-cd "${TP_SOURCE_DIR}/${S2_SOURCE}"
-if [[ ! -f "${PATCHED_MARK}" ]]; then
-    patch -p1 <"${TP_PATCH_DIR}/s2geometry-0.9.0.patch"
-    touch "${PATCHED_MARK}"
-fi
-cd -
-echo "Finished patching ${S2_SOURCE}"
-
 # gsasl2 patch to fix link error such as mutilple func defination
 # when link target with kerberos
 cd "${TP_SOURCE_DIR}/${GSASL_SOURCE}"
@@ -275,6 +275,16 @@ if [[ ! -f ${PATCHED_MARK} ]]; then
 fi
 cd -
 echo "Finished patching ${GSASL_SOURCE}"
+
+# cyrus-sasl patch to force compile gssapi plugin when static linking
+# this is for librdkafka with sasl
+cd "${TP_SOURCE_DIR}/${CYRUS_SASL_SOURCE}"
+if [[ ! -f ${PATCHED_MARK} ]]; then
+    patch -p1 <"${TP_PATCH_DIR}/cyrus-sasl-2.1.27.patch"
+    touch "${PATCHED_MARK}"
+fi
+cd -
+echo "Finished patching ${CYRUS_SASL_SOURCE}"
 
 # rocksdb patch to fix compile error
 if [[ "${ROCKSDB_SOURCE}" == "rocksdb-5.14.2" ]]; then
@@ -385,3 +395,14 @@ if [[ ! -f "${PATCHED_MARK}" ]]; then
 fi
 cd -
 echo "Finished patching ${BRPC_SOURCE}"
+
+# patch jemalloc, change simdjson::dom::element_type::BOOL to BOOLEAN to avoid conflict with odbc macro BOOL
+if [[ "${SIMDJSON_SOURCE}" = "simdjson-3.0.1" ]]; then
+    cd "${TP_SOURCE_DIR}/${SIMDJSON_SOURCE}"
+    if [[ ! -f "${PATCHED_MARK}" ]]; then
+        patch -p1 <"${TP_PATCH_DIR}/simdjson-3.0.1.patch"
+        touch "${PATCHED_MARK}"
+    fi
+    cd -
+fi
+echo "Finished patching ${SIMDJSON_SOURCE}"

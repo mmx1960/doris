@@ -17,13 +17,12 @@
 
 package org.apache.doris.nereids.trees.expressions.functions.agg;
 
+import org.apache.doris.catalog.FunctionSignature;
 import org.apache.doris.nereids.trees.expressions.Expression;
-import org.apache.doris.nereids.trees.expressions.functions.PropagateNullable;
+import org.apache.doris.nereids.trees.expressions.functions.ExplicitlyCastableSignature;
 import org.apache.doris.nereids.trees.expressions.shape.UnaryExpression;
-import org.apache.doris.nereids.trees.expressions.typecoercion.ImplicitCastInputTypes;
 import org.apache.doris.nereids.types.BitmapType;
 import org.apache.doris.nereids.types.DataType;
-import org.apache.doris.nereids.types.coercion.AbstractDataType;
 
 import com.google.common.base.Preconditions;
 import com.google.common.collect.ImmutableList;
@@ -31,43 +30,42 @@ import com.google.common.collect.ImmutableList;
 import java.util.List;
 
 /** GroupBitmapXor */
-public class GroupBitmapXor extends AggregateFunction
-        implements UnaryExpression, PropagateNullable, ImplicitCastInputTypes {
-    public GroupBitmapXor(Expression arg0) {
-        super("group_bitmap_xor", arg0);
+public class GroupBitmapXor extends NullableAggregateFunction implements UnaryExpression, ExplicitlyCastableSignature {
+    public static final List<FunctionSignature> SIGNATURES = ImmutableList.of(
+            FunctionSignature.ret(BitmapType.INSTANCE).args(BitmapType.INSTANCE)
+    );
+
+    public GroupBitmapXor(Expression child) {
+        this(child, false);
     }
 
-    public GroupBitmapXor(AggregateParam aggregateParam, Expression arg0) {
-        super("group_bitmap_xor", aggregateParam, arg0);
+    private GroupBitmapXor(Expression arg0, boolean isAlwaysNullable) {
+        super("group_bitmap_xor", isAlwaysNullable, arg0);
+    }
+
+    @Override
+    protected List<DataType> intermediateTypes() {
+        return ImmutableList.of(BitmapType.INSTANCE);
+    }
+
+    @Override
+    public GroupBitmapXor withDistinctAndChildren(boolean isDistinct, List<Expression> children) {
+        return withChildren(children);
     }
 
     @Override
     public GroupBitmapXor withChildren(List<Expression> children) {
         Preconditions.checkArgument(children.size() == 1);
-        return new GroupBitmapXor(getAggregateParam(), children.get(0));
+        return new GroupBitmapXor(children.get(0), isAlwaysNullable);
     }
 
     @Override
-    public List<AbstractDataType> expectedInputTypes() {
-        if (isGlobal() && inputTypesBeforeDissemble().isPresent()) {
-            return ImmutableList.of();
-        } else {
-            return ImmutableList.of(BitmapType.INSTANCE);
-        }
+    public NullableAggregateFunction withAlwaysNullable(boolean isAlwaysNullable) {
+        return new GroupBitmapXor(children.get(0), isAlwaysNullable);
     }
 
     @Override
-    public DataType getFinalType() {
-        return BitmapType.INSTANCE;
-    }
-
-    @Override
-    public DataType getIntermediateType() {
-        return BitmapType.INSTANCE;
-    }
-
-    @Override
-    public GroupBitmapXor withAggregateParam(AggregateParam aggregateParam) {
-        return new GroupBitmapXor(aggregateParam, child());
+    public List<FunctionSignature> getSignatures() {
+        return SIGNATURES;
     }
 }

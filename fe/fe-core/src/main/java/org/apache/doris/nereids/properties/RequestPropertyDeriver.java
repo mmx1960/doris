@@ -24,21 +24,26 @@ import org.apache.doris.nereids.memo.GroupExpression;
 import org.apache.doris.nereids.properties.DistributionSpecHash.ShuffleType;
 import org.apache.doris.nereids.trees.expressions.ExprId;
 import org.apache.doris.nereids.trees.expressions.Expression;
+import org.apache.doris.nereids.trees.expressions.NamedExpression;
 import org.apache.doris.nereids.trees.expressions.SlotReference;
-import org.apache.doris.nereids.trees.plans.AggPhase;
+import org.apache.doris.nereids.trees.expressions.functions.agg.AggregateFunction;
+import org.apache.doris.nereids.trees.plans.JoinHint;
 import org.apache.doris.nereids.trees.plans.Plan;
-import org.apache.doris.nereids.trees.plans.physical.PhysicalAggregate;
 import org.apache.doris.nereids.trees.plans.physical.PhysicalAssertNumRows;
+import org.apache.doris.nereids.trees.plans.physical.PhysicalGenerate;
 import org.apache.doris.nereids.trees.plans.physical.PhysicalHashJoin;
 import org.apache.doris.nereids.trees.plans.physical.PhysicalLocalQuickSort;
 import org.apache.doris.nereids.trees.plans.physical.PhysicalNestedLoopJoin;
 import org.apache.doris.nereids.trees.plans.physical.PhysicalQuickSort;
 import org.apache.doris.nereids.trees.plans.visitor.PlanVisitor;
+import org.apache.doris.nereids.util.ExpressionUtils;
 import org.apache.doris.nereids.util.JoinUtils;
 
+import com.google.common.base.Preconditions;
 import com.google.common.collect.Lists;
 
 import java.util.List;
+import java.util.Set;
 import java.util.stream.Collectors;
 
 /**
@@ -72,6 +77,14 @@ public class RequestPropertyDeriver extends PlanVisitor<Void, PlanContext> {
 
     @Override
     public Void visit(Plan plan, PlanContext context) {
+        if (plan instanceof RequirePropertiesSupplier) {
+            RequireProperties requireProperties = ((RequirePropertiesSupplier) plan).getRequireProperties();
+            List<PhysicalProperties> requestPhysicalProperties =
+                    requireProperties.computeRequirePhysicalProperties(plan, requestPropertyFromParent);
+            addRequestPropertyToChildren(requestPhysicalProperties);
+            return null;
+        }
+
         List<PhysicalProperties> requiredPropertyList =
                 Lists.newArrayListWithCapacity(context.getGroupExpression().arity());
         for (int i = context.getGroupExpression().arity(); i > 0; --i) {
@@ -82,85 +95,74 @@ public class RequestPropertyDeriver extends PlanVisitor<Void, PlanContext> {
     }
 
     @Override
-    public Void visitPhysicalAggregate(PhysicalAggregate<? extends Plan> agg, PlanContext context) {
-        // 1. first phase agg just return any
-        if (agg.getAggPhase().isLocal() && !agg.isFinalPhase()) {
-            addToRequestPropertyToChildren(PhysicalProperties.ANY);
-            return null;
-        }
-        if (agg.getAggPhase() == AggPhase.GLOBAL && !agg.isFinalPhase()) {
-            addToRequestPropertyToChildren(requestPropertyFromParent);
-            return null;
-        }
-        // 2. second phase agg, need to return shuffle with partition key
-        List<Expression> partitionExpressions = agg.getPartitionExpressions();
-        if (partitionExpressions.isEmpty()) {
-            addToRequestPropertyToChildren(PhysicalProperties.GATHER);
-            return null;
-        }
-        // TODO: when parent is a join node,
-        //    use requestPropertyFromParent to keep column order as join to avoid shuffle again.
-        if (partitionExpressions.stream().allMatch(SlotReference.class::isInstance)) {
-            List<ExprId> partitionedSlots = partitionExpressions.stream()
-                    .map(SlotReference.class::cast)
-                    .map(SlotReference::getExprId)
-                    .collect(Collectors.toList());
-            addToRequestPropertyToChildren(
-                    PhysicalProperties.createHash(new DistributionSpecHash(partitionedSlots, ShuffleType.AGGREGATE)));
-            return null;
-        }
-
-        throw new RuntimeException("Need to add a rule to split aggregate to aggregate(project),"
-                + " see more in AggregateDisassemble");
-
-        // TODO: add other phase logical when we support distinct aggregate
-    }
-
-    @Override
     public Void visitPhysicalQuickSort(PhysicalQuickSort<? extends Plan> sort, PlanContext context) {
-        addToRequestPropertyToChildren(PhysicalProperties.ANY);
+        addRequestPropertyToChildren(PhysicalProperties.ANY);
         return null;
     }
 
     @Override
     public Void visitPhysicalLocalQuickSort(PhysicalLocalQuickSort<? extends Plan> sort, PlanContext context) {
         // TODO: rethink here, should we throw exception directly?
-        addToRequestPropertyToChildren(PhysicalProperties.ANY);
+        addRequestPropertyToChildren(PhysicalProperties.ANY);
         return null;
     }
 
     @Override
     public Void visitPhysicalHashJoin(PhysicalHashJoin<? extends Plan, ? extends Plan> hashJoin, PlanContext context) {
-        // for broadcast join
-        if (JoinUtils.couldBroadcast(hashJoin)) {
-            addToRequestPropertyToChildren(PhysicalProperties.ANY, PhysicalProperties.REPLICATED);
-        }
+        JoinHint hint = hashJoin.getHint();
+        switch (hint) {
+            case BROADCAST_RIGHT:
+                addBroadcastJoinRequestProperty();
+                break;
+            case SHUFFLE_RIGHT:
+                addShuffleJoinRequestProperty(hashJoin);
+                break;
+            case NONE:
+            default:
+                // for shuffle join
+                if (JoinUtils.couldShuffle(hashJoin)) {
+                    addShuffleJoinRequestProperty(hashJoin);
+                }
+                // for broadcast join
+                if (JoinUtils.couldBroadcast(hashJoin)) {
+                    addRequestPropertyToChildren(PhysicalProperties.ANY, PhysicalProperties.REPLICATED);
+                }
 
-        // for shuffle join
-        if (JoinUtils.couldShuffle(hashJoin)) {
-            Pair<List<ExprId>, List<ExprId>> onClauseUsedSlots = JoinUtils.getOnClauseUsedSlots(hashJoin);
-            // shuffle join
-            addToRequestPropertyToChildren(
-                    PhysicalProperties.createHash(
-                            new DistributionSpecHash(onClauseUsedSlots.first, ShuffleType.JOIN)),
-                    PhysicalProperties.createHash(
-                            new DistributionSpecHash(onClauseUsedSlots.second, ShuffleType.JOIN)));
         }
-
         return null;
+    }
+
+    private void addBroadcastJoinRequestProperty() {
+        addRequestPropertyToChildren(PhysicalProperties.ANY, PhysicalProperties.REPLICATED);
+    }
+
+    private void addShuffleJoinRequestProperty(PhysicalHashJoin<? extends Plan, ? extends Plan> hashJoin) {
+        Pair<List<ExprId>, List<ExprId>> onClauseUsedSlots = JoinUtils.getOnClauseUsedSlots(hashJoin);
+        // shuffle join
+        addRequestPropertyToChildren(
+                PhysicalProperties.createHash(
+                        new DistributionSpecHash(onClauseUsedSlots.first, ShuffleType.JOIN)),
+                PhysicalProperties.createHash(
+                        new DistributionSpecHash(onClauseUsedSlots.second, ShuffleType.JOIN)));
     }
 
     @Override
     public Void visitPhysicalNestedLoopJoin(
             PhysicalNestedLoopJoin<? extends Plan, ? extends Plan> nestedLoopJoin, PlanContext context) {
         // TODO: currently doris only use NLJ to do cross join, update this if we use NLJ to do other joins.
-        addToRequestPropertyToChildren(PhysicalProperties.ANY, PhysicalProperties.REPLICATED);
+        addRequestPropertyToChildren(PhysicalProperties.ANY, PhysicalProperties.REPLICATED);
         return null;
     }
 
     @Override
     public Void visitPhysicalAssertNumRows(PhysicalAssertNumRows<? extends Plan> assertNumRows, PlanContext context) {
-        addToRequestPropertyToChildren(PhysicalProperties.GATHER);
+        addRequestPropertyToChildren(PhysicalProperties.GATHER);
+        return null;
+    }
+
+    @Override
+    public Void visitPhysicalGenerate(PhysicalGenerate<? extends Plan> generate, PlanContext context) {
+        addRequestPropertyToChildren(PhysicalProperties.ANY);
         return null;
     }
 
@@ -168,8 +170,36 @@ public class RequestPropertyDeriver extends PlanVisitor<Void, PlanContext> {
      * helper function to assemble request children physical properties
      * @param physicalProperties one set request properties for children
      */
-    private void addToRequestPropertyToChildren(PhysicalProperties... physicalProperties) {
+    private void addRequestPropertyToChildren(PhysicalProperties... physicalProperties) {
         requestPropertyToChildren.add(Lists.newArrayList(physicalProperties));
+    }
+
+    private void addRequestPropertyToChildren(List<PhysicalProperties> physicalProperties) {
+        requestPropertyToChildren.add(physicalProperties);
+    }
+
+    private List<ExprId> extractExprIdFromDistinctFunction(List<NamedExpression> outputExpression) {
+        Set<AggregateFunction> distinctAggregateFunctions = ExpressionUtils.collect(outputExpression, expr ->
+                expr instanceof AggregateFunction && ((AggregateFunction) expr).isDistinct()
+        );
+        List<ExprId> exprIds = Lists.newArrayList();
+        for (AggregateFunction aggregateFunction : distinctAggregateFunctions) {
+            for (Expression expr : aggregateFunction.children()) {
+                Preconditions.checkState(expr instanceof SlotReference, "normalize aggregate failed to"
+                        + " normalize aggregate function " + aggregateFunction.toSql());
+                exprIds.add(((SlotReference) expr).getExprId());
+            }
+        }
+        return exprIds;
+    }
+
+    private void addRequestHashDistribution(List<Expression> hashColumns, ShuffleType shuffleType) {
+        List<ExprId> partitionedSlots = hashColumns.stream()
+                .map(SlotReference.class::cast)
+                .map(SlotReference::getExprId)
+                .collect(Collectors.toList());
+        addRequestPropertyToChildren(
+                PhysicalProperties.createHash(new DistributionSpecHash(partitionedSlots, shuffleType)));
     }
 }
 

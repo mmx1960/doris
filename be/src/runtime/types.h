@@ -73,6 +73,8 @@ struct TypeDescriptor {
         if (type == TYPE_DECIMALV2) {
             precision = 27;
             scale = 9;
+        } else if (type == TYPE_DATETIMEV2) {
+            scale = 6;
         }
     }
 
@@ -160,6 +162,11 @@ struct TypeDescriptor {
 
     void to_protobuf(PTypeDesc* ptype) const;
 
+    bool is_integer_type() const {
+        return type == TYPE_TINYINT || type == TYPE_SMALLINT || type == TYPE_INT ||
+               type == TYPE_BIGINT;
+    }
+
     bool is_string_type() const {
         return type == TYPE_VARCHAR || type == TYPE_CHAR || type == TYPE_HLL ||
                type == TYPE_OBJECT || type == TYPE_QUANTILE_STATE || type == TYPE_STRING;
@@ -170,7 +177,11 @@ struct TypeDescriptor {
     bool is_date_v2_type() const { return type == TYPE_DATEV2; }
     bool is_datetime_v2_type() const { return type == TYPE_DATETIMEV2; }
 
-    bool is_decimal_type() const { return (type == TYPE_DECIMALV2); }
+    bool is_decimal_v2_type() const { return type == TYPE_DECIMALV2; }
+
+    bool is_decimal_v3_type() const {
+        return (type == TYPE_DECIMAL32) || (type == TYPE_DECIMAL64) || (type == TYPE_DECIMAL128I);
+    }
 
     bool is_datetime_type() const { return type == TYPE_DATETIME; }
 
@@ -186,6 +197,8 @@ struct TypeDescriptor {
     bool is_collection_type() const { return type == TYPE_ARRAY || type == TYPE_MAP; }
 
     bool is_array_type() const { return type == TYPE_ARRAY; }
+
+    bool is_bitmap_type() const { return type == TYPE_OBJECT; }
 
     /// Returns the byte size of this type.  Returns 0 for variable length types.
     int get_byte_size() const { return ::doris::get_byte_size(type); }

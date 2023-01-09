@@ -47,7 +47,7 @@ public interface ComputeSignature extends FunctionTrait, ImplicitCastInputTypes 
      *
      * @return the matched signature
      */
-    FunctionSignature searchSignature();
+    FunctionSignature searchSignature(List<FunctionSignature> signatures);
 
     ///// re-defined other interface's methods, so we can mixin this interfaces like a trait /////
 
@@ -64,7 +64,7 @@ public interface ComputeSignature extends FunctionTrait, ImplicitCastInputTypes 
      */
     @Override
     default List<AbstractDataType> expectedInputTypes() {
-        return (List) getSignature().argumentsTypes;
+        return getSignature().argumentsTypes;
     }
 
     /**

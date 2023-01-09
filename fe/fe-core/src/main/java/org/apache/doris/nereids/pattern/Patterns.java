@@ -23,15 +23,22 @@ import org.apache.doris.nereids.trees.plans.GroupPlan;
 import org.apache.doris.nereids.trees.plans.LeafPlan;
 import org.apache.doris.nereids.trees.plans.Plan;
 import org.apache.doris.nereids.trees.plans.UnaryPlan;
+import org.apache.doris.nereids.trees.plans.algebra.Aggregate;
 import org.apache.doris.nereids.trees.plans.logical.LogicalBinary;
+import org.apache.doris.nereids.trees.plans.logical.LogicalExcept;
+import org.apache.doris.nereids.trees.plans.logical.LogicalIntersect;
 import org.apache.doris.nereids.trees.plans.logical.LogicalLeaf;
 import org.apache.doris.nereids.trees.plans.logical.LogicalPlan;
 import org.apache.doris.nereids.trees.plans.logical.LogicalRelation;
+import org.apache.doris.nereids.trees.plans.logical.LogicalSetOperation;
 import org.apache.doris.nereids.trees.plans.logical.LogicalUnary;
+import org.apache.doris.nereids.trees.plans.logical.LogicalUnion;
 import org.apache.doris.nereids.trees.plans.physical.PhysicalBinary;
 import org.apache.doris.nereids.trees.plans.physical.PhysicalLeaf;
 import org.apache.doris.nereids.trees.plans.physical.PhysicalRelation;
 import org.apache.doris.nereids.trees.plans.physical.PhysicalUnary;
+
+import java.util.Arrays;
 
 /**
  * An interface provided some PatternDescriptor.
@@ -173,6 +180,98 @@ public interface Patterns {
         return new PatternDescriptor(new TypePattern(LogicalRelation.class), defaultPromise());
     }
 
+    /**
+     * create a logicalSetOperation pattern.
+     */
+    default PatternDescriptor<LogicalSetOperation>
+            logicalSetOperation(
+                PatternDescriptor... children) {
+        return new PatternDescriptor(
+                new TypePattern(LogicalSetOperation.class,
+                        Arrays.stream(children)
+                                .map(PatternDescriptor::getPattern)
+                                .toArray(Pattern[]::new)),
+                defaultPromise());
+    }
+
+    /**
+     * create a logicalSetOperation group.
+     */
+    default PatternDescriptor<LogicalSetOperation> logicalSetOperation() {
+        return new PatternDescriptor(
+                new TypePattern(LogicalSetOperation.class, multiGroup().pattern),
+                defaultPromise());
+    }
+
+    /**
+     * create a logicalUnion pattern.
+     */
+    default PatternDescriptor<LogicalUnion>
+            logicalUnion(
+                PatternDescriptor... children) {
+        return new PatternDescriptor(
+                new TypePattern(LogicalUnion.class,
+                        Arrays.stream(children)
+                                .map(PatternDescriptor::getPattern)
+                                .toArray(Pattern[]::new)),
+                defaultPromise());
+    }
+
+    /**
+     * create a logicalUnion group.
+     */
+    default PatternDescriptor<LogicalUnion> logicalUnion() {
+        return new PatternDescriptor(
+                new TypePattern(LogicalUnion.class, multiGroup().pattern),
+                defaultPromise());
+    }
+
+    /**
+     * create a logicalExcept pattern.
+     */
+    default PatternDescriptor<LogicalExcept>
+            logicalExcept(
+                PatternDescriptor... children) {
+        return new PatternDescriptor(
+                new TypePattern(LogicalExcept.class,
+                        Arrays.stream(children)
+                                .map(PatternDescriptor::getPattern)
+                                .toArray(Pattern[]::new)),
+                defaultPromise());
+    }
+
+    /**
+     * create a logicalExcept group.
+     */
+    default PatternDescriptor<LogicalExcept> logicalExcept() {
+        return new PatternDescriptor(
+                new TypePattern(LogicalExcept.class, multiGroup().pattern),
+                defaultPromise());
+    }
+
+    /**
+     * create a logicalUnion pattern.
+     */
+    default PatternDescriptor<LogicalIntersect>
+            logicalIntersect(
+                PatternDescriptor... children) {
+        return new PatternDescriptor(
+                new TypePattern(LogicalIntersect.class,
+                        Arrays.stream(children)
+                                .map(PatternDescriptor::getPattern)
+                                .toArray(Pattern[]::new)),
+                defaultPromise());
+    }
+
+    /**
+     * create a logicalUnion group.
+     */
+    default PatternDescriptor<LogicalIntersect> logicalIntersect() {
+        return new PatternDescriptor(
+                new TypePattern(LogicalIntersect.class, multiGroup().pattern),
+                defaultPromise());
+    }
+
     /* abstract physical plan patterns */
 
     /**
@@ -226,5 +325,19 @@ public interface Patterns {
      */
     default PatternDescriptor<PhysicalRelation> physicalRelation() {
         return new PatternDescriptor(new TypePattern(PhysicalRelation.class), defaultPromise());
+    }
+
+    /**
+     * create a aggregate pattern.
+     */
+    default PatternDescriptor<Aggregate<GroupPlan>> aggregate() {
+        return new PatternDescriptor(new TypePattern(Aggregate.class, Pattern.GROUP), defaultPromise());
+    }
+
+    /**
+     * create a aggregate pattern.
+     */
+    default <C extends Plan> PatternDescriptor<Aggregate<C>> aggregate(PatternDescriptor<C> child) {
+        return new PatternDescriptor(new TypePattern(Aggregate.class, child.pattern), defaultPromise());
     }
 }

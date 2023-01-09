@@ -19,7 +19,8 @@ package org.apache.doris.nereids.types;
 
 import org.apache.doris.catalog.ScalarType;
 import org.apache.doris.catalog.Type;
-import org.apache.doris.nereids.types.coercion.PrimitiveType;
+import org.apache.doris.nereids.exceptions.AnalysisException;
+import org.apache.doris.nereids.types.coercion.DateLikeType;
 
 import com.google.common.base.Preconditions;
 
@@ -28,9 +29,9 @@ import java.util.Objects;
 /**
  * Datetime type in Nereids.
  */
-public class DateTimeV2Type extends PrimitiveType {
+public class DateTimeV2Type extends DateLikeType {
     public static final int MAX_SCALE = 6;
-    public static final DateTimeV2Type INSTANCE = new DateTimeV2Type(0);
+    public static final DateTimeV2Type SYSTEM_DEFAULT = new DateTimeV2Type(0);
 
     private static final int WIDTH = 8;
 
@@ -41,9 +42,14 @@ public class DateTimeV2Type extends PrimitiveType {
         this.scale = scale;
     }
 
+    /**
+     * create DateTimeV2Type from scale
+     */
     public static DateTimeV2Type of(int scale) {
-        if (scale == INSTANCE.scale) {
-            return INSTANCE;
+        if (scale == SYSTEM_DEFAULT.scale) {
+            return SYSTEM_DEFAULT;
+        } else if (scale > MAX_SCALE || scale < 0) {
+            throw new AnalysisException("Scale of Datetime/Time must between 0 and 6. Scale was set to: " + scale);
         } else {
             return new DateTimeV2Type(scale);
         }
